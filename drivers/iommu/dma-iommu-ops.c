@@ -54,7 +54,7 @@ static void *__iommu_alloc_attrs(struct device *dev, size_t size,
 		pgprot_t prot = arch_get_dma_pgprot(attrs, PAGE_KERNEL,
 						    coherent);
 
-		pages = iommu_dma_alloc(dev, iosize, gfp, ioprot, handle,
+		pages = iommu_dma_alloc(dev, iosize, gfp, attrs, ioprot, handle,
 					arch_flush_page);
 		if (!pages)
 			return NULL;
