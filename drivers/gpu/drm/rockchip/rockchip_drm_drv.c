@@ -1419,6 +1419,9 @@ static int rockchip_drm_bind(struct device *dev)
 		dev_info(dev, "devfreq is ready\n");
 	}
 
+	INIT_LIST_HEAD(&private->psr_list);
+	mutex_init(&private->psr_list_mutex);
+
 	private->hdmi_pll.pll = devm_clk_get(dev, "hdmi-tmds-pll");
 	if (PTR_ERR(private->hdmi_pll.pll) == -ENOENT) {
 		private->hdmi_pll.pll = NULL;

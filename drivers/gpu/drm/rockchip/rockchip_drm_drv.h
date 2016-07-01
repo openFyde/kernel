@@ -212,6 +212,9 @@ struct rockchip_drm_private {
 	struct rockchip_dclk_pll hdmi_pll;
 	struct devfreq *devfreq;
 	bool dmc_support;
+
+	struct list_head psr_list;
+	struct mutex psr_list_mutex;
 };
 
 #ifndef MODULE
