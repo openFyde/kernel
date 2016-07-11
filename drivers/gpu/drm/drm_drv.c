@@ -27,6 +27,7 @@
  */
 
 #include <linux/debugfs.h>
+#include <linux/fence.h>
 #include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -673,8 +674,20 @@ struct drm_device *drm_dev_alloc(struct drm_driver *driver,
 		}
 	}
 
+	if (parent) {
+		ret = drm_dev_set_unique(dev, dev_name(parent));
+		if (ret)
+			goto err_setunique;
+	}
+
+#ifdef CONFIG_DRM_DMA_SYNC
+	dev->atomic_in_fence_context = fence_context_alloc(1);
+	atomic_set(&dev->atomic_in_fence_seqno, 0);
+#endif
+
 	return dev;
 
+err_setunique:
 err_ctxbitmap:
 	drm_legacy_ctxbitmap_cleanup(dev);
 	drm_ht_remove(&dev->map_hash);
