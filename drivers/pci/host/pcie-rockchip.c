@@ -400,6 +400,13 @@ static int rockchip_pcie_rd_other_conf(struct rockchip_pcie *rockchip,
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 	}
 
+	if (bus->parent->number == rockchip->root_bus_nr)
+		rockchip_pcie_cfg_configuration_accesses(rockchip,
+						AXI_WRAPPER_TYPE0_CFG);
+	else
+		rockchip_pcie_cfg_configuration_accesses(rockchip,
+						AXI_WRAPPER_TYPE1_CFG);
+
 	if (size == 4) {
 		*val = readl(rockchip->reg_base + busdev);
 	} else if (size == 2) {
@@ -426,6 +433,13 @@ static int rockchip_pcie_wr_other_conf(struct rockchip_pcie *rockchip,
 		return PCIBIOS_DEVICE_NOT_FOUND;
 	if (!IS_ALIGNED(busdev, size))
 		return PCIBIOS_BAD_REGISTER_NUMBER;
+
+	if (bus->parent->number == rockchip->root_bus_nr)
+		rockchip_pcie_cfg_configuration_accesses(rockchip,
+						AXI_WRAPPER_TYPE0_CFG);
+	else
+		rockchip_pcie_cfg_configuration_accesses(rockchip,
+						AXI_WRAPPER_TYPE1_CFG);
 
 	if (size == 4)
 		writel(val, rockchip->reg_base + busdev);
