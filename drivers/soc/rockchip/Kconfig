@@ -90,4 +90,10 @@ config ROCKCHIP_SUSPEND_MODE
 	help
 	  Say Y here if you want to set the suspend mode to the ATF.
 
+config ROCKCHIP_VENDOR_STORAGE
+	bool "Use Rockchip Vendor Storage"
+	depends on MMC_DW_ROCKCHIP
+	help
+	  Say Y here if you want to read parameters from eMMC/SD card
+
 endif
