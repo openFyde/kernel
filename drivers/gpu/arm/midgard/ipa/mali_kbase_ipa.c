@@ -107,6 +107,10 @@ static struct device_node *get_model_dt_node(struct kbase_ipa_model *model)
 	snprintf(compat_string, sizeof(compat_string), "arm,%s",
 		 model->ops->name);
 
+	/* of_find_compatible_node() will call of_node_put() on the root node,
+	 * so take a reference on it first.
+	 */
+	of_node_get(model->kbdev->dev->of_node);
 	model_dt_node = of_find_compatible_node(model->kbdev->dev->of_node,
 						NULL, compat_string);
 	if (!model_dt_node && !model->missing_dt_node_warning) {
