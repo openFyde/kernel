@@ -1142,7 +1142,10 @@ static int drm_atomic_add_implicit_fences(struct drm_device *dev,
 		return -ENOMEM;
 
 	for_each_plane_in_state(state, plane, plane_state, i) {
-		WARN_ON(plane_state->fence);
+		/* No implicit fencing if explicit fence is attached. */
+		if (plane_state->fence)
+			continue;
+
 		/* If fb is not changing or new fb is NULL. */
 		if (plane->state->fb == plane_state->fb || !plane_state->fb)
 			continue;
@@ -1195,6 +1198,10 @@ static int drm_atomic_add_implicit_fences(struct drm_device *dev,
 	}
 
 	for_each_plane_in_state(state, plane, plane_state, i) {
+		/* No implicit fencing if explicit fence is attached. */
+		if (plane_state->fence)
+			continue;
+
 		/* If fb is not changing or new fb is NULL. */
 		if (plane->state->fb == plane_state->fb || !plane_state->fb)
 			continue;
