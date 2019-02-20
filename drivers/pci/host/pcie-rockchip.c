@@ -1508,6 +1508,9 @@ static const struct attribute_group pcie_attr_group = {
 	.attrs = pcie_attrs,
 };
 
+bool rk_pcie_port_initialized = false;
+EXPORT_SYMBOL(rk_pcie_port_initialized);
+
 static int rockchip_pcie_probe(struct platform_device *pdev)
 {
 	struct rockchip_pcie *rockchip;
@@ -1634,6 +1637,7 @@ static int rockchip_pcie_probe(struct platform_device *pdev)
 		goto err_probe_dma;
 	}
 
+	rk_pcie_port_initialized = true;
 	return 0;
 
 err_probe_dma:
@@ -1657,6 +1661,7 @@ err_hclk_pcie:
 err_aclk_perf_pcie:
 	clk_disable_unprepare(rockchip->aclk_pcie);
 err_aclk_pcie:
+	rk_pcie_port_initialized = true;
 	return err;
 }
 

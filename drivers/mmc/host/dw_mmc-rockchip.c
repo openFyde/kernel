@@ -6,7 +6,7 @@
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  */
-
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
@@ -202,10 +202,16 @@ free:
 	return ret;
 }
 
+#ifdef CONFIG_PCIE_ROCKCHIP
+extern bool rk_pcie_port_initialized;
+static s64 defer_start = 0, elapsed = 0;
+#endif
+
 static int dw_mci_rk3288_parse_dt(struct dw_mci *host)
 {
 	struct device_node *np = host->dev->of_node;
 	struct dw_mci_rockchip_priv_data *priv;
+	int defer_pcie;
 
 	priv = devm_kzalloc(host->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -222,6 +228,26 @@ static int dw_mci_rk3288_parse_dt(struct dw_mci *host)
 	priv->sample_clk = devm_clk_get(host->dev, "ciu-sample");
 	if (IS_ERR(priv->sample_clk))
 		dev_dbg(host->dev, "ciu_sample not available\n");
+
+#ifdef CONFIG_PCIE_ROCKCHIP
+	if (of_property_read_u32(np, "defer_pcie", &defer_pcie))
+		defer_pcie = 0;
+
+	if (defer_pcie > 0) {
+		if (!rk_pcie_port_initialized) {
+			if (defer_start == 0)
+				defer_start = ktime_to_ms(ktime_get());
+			elapsed = ktime_to_ms(ktime_get()) - defer_start;
+			if (elapsed <= defer_pcie) {
+				dev_info(host->dev, "deferring for a max of %dms while pcie port initializes. Waited %lldms so far.\n", defer_pcie, elapsed);
+				return -EPROBE_DEFER;
+			} else
+				dev_info(host->dev, "probe defer timed out waiting for pcie init, continuing...\n");
+		} else {
+			dev_info(host->dev, "detected pcie initialized, continuing...\n");
+		}
+	}
+#endif
 
 	host->priv = priv;
 
