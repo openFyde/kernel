@@ -22,7 +22,7 @@
 #define ROCKCHIP_VPU_COMMON_H_
 
 /* Enable debugging by default for now. */
-#define DEBUG
+// #define DEBUG
 
 #include <linux/platform_device.h>
 #include <linux/videodev2.h>
