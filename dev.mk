@@ -57,4 +57,4 @@ kernel-update-dts: .config .scmversion
 kernel-update-image: .scmversion
 	rsync --partial --checksum -rv arch/arm64/boot/Image root@$(REMOTE_HOST):$(REMOTE_DIR)/boot/vmlinuz-$(KERNEL_RELEASE)
 	rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip root@$(REMOTE_HOST):$(REMOTE_DIR)/boot/dtbs/$(KERNEL_RELEASE)
-	rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) root@$(REMOTE_HOST):$(REMOTE_DIR)/lib/modules/$(KERNEL_RELEASE)
+	rsync --partial --checksum --delete -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) root@$(REMOTE_HOST):$(REMOTE_DIR)/lib/modules/
