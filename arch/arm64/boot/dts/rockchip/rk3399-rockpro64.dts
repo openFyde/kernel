@@ -1139,6 +1139,10 @@
 	status = "okay";
 };
 
+&rga {
+	status = "okay";
+};
+
 &rkvdec {
 	status = "okay";
 };
