@@ -26,6 +26,7 @@
 #include <linux/irqdomain.h>
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
+#include <linux/moduleparam.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_pci.h>
@@ -253,7 +254,11 @@ struct rockchip_pcie {
 	int wait_ep;
 	struct dma_trx_obj *dma_obj;
 	struct list_head resources;
+	u32	bus_scan_delay;
 };
+
+static int bus_scan_delay = -1;
+core_param(pcie_rk_bus_scan_delay, bus_scan_delay, int, S_IRUGO);
 
 static u32 rockchip_pcie_read(struct rockchip_pcie *rockchip, u32 reg)
 {
@@ -1075,6 +1080,14 @@ static int rockchip_pcie_parse_dt(struct rockchip_pcie *rockchip)
 		dev_info(dev, "no vpcie0v9 regulator found\n");
 	}
 
+	err = of_property_read_u32(node, "bus-scan-delay-ms", &rockchip->bus_scan_delay);
+	if (err) {
+		dev_info(dev, "no bus-scan-delay-ms in device tree, default 0 ms\n");
+		rockchip->bus_scan_delay = 0;
+	} else {
+		dev_info(dev, "bus-scan-delay-ms in device tree is %u ms\n", rockchip->bus_scan_delay);
+	}
+
 	mem = of_parse_phandle(node, "memory-region", 0);
 	if (!mem) {
 		dev_warn(dev, "missing \"memory-region\" property\n");
@@ -1399,6 +1412,7 @@ static int rockchip_pcie_really_probe(struct rockchip_pcie *rockchip)
 	int err;
 	struct pci_bus *bus, *child;
 	struct	device *dev = rockchip->dev;
+	u32 delay = 0;
 
 	err = rockchip_pcie_init_port(rockchip);
 	if (err)
@@ -1409,6 +1423,18 @@ static int rockchip_pcie_really_probe(struct rockchip_pcie *rockchip)
 	err = rockchip_cfg_atu(rockchip);
 	if (err)
 		return err;
+
+	/* Prefer command-line param over device tree */
+	if (bus_scan_delay > 0) {
+		delay = bus_scan_delay;
+		dev_info(dev, "wait %u ms (from command-line) before bus scan\n", delay);
+	} else if (rockchip->bus_scan_delay > 0 && bus_scan_delay < 0) {
+		delay = rockchip->bus_scan_delay;
+		dev_info(dev, "wait %u ms (from device tree) before bus scan\n", delay);
+	}
+	if (delay > 0) {
+		msleep(delay);
+	}
 
 	bus = pci_scan_root_bus(dev, 0, &rockchip_pcie_ops,
 				rockchip, &rockchip->resources);
