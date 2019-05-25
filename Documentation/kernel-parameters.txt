@@ -3509,13 +3509,6 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	rhash_entries=	[KNL,NET]
 			Set number of hash buckets for route cache
 
-	rkdwmmc_defer_time=
-			Minimum time in ms to wait for Rockchip pcie port to get initialized
-			and to defer Rockchip dw_mmc probe. This is a workaround for
-			Rockpro64 sdio0 and pcie conflict. Only enabled with
-			CONFIG_PCIE_ROCKCHIP.
-			Default value is 2000.
-
 	ro		[KNL] Mount root device read-only on boot
 
 	rockchip.usb_uart
