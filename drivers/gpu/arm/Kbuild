@@ -22,6 +22,8 @@
 
 obj-$(CONFIG_MALI_MIDGARD_FOR_LINUX) += midgard_for_linux/
 
+obj-$(CONFIG_MALI_MIDGARD_FOR_CROS) += midgard_for_cros/
+
 obj-$(CONFIG_MALI_MIDGARD_FOR_ANDROID) += midgard/
 
 obj-$(CONFIG_MALI400)      += mali400/

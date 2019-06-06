@@ -1,5 +1,5 @@
 #
-# (C) COPYRIGHT 2012 ARM Limited. All rights reserved.
+# (C) COPYRIGHT 2014-2017 ARM Limited. All rights reserved.
 #
 # This program is free software and is provided to you under the terms of the
 # GNU General Public License version 2 as published by the Free Software
@@ -18,34 +18,18 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 #
-#
-source "drivers/gpu/arm/mali400/mali/Kconfig"
 
-choice
-	prompt "Mali Midgard driver"
+# linux build system bootstrap for out-of-tree module
 
-config MALI_MIDGARD_FOR_ANDROID
-	bool "Mali Midgard for Android"
+# default to building for the host
+ARCH ?= $(shell uname -m)
 
-config MALI_MIDGARD_FOR_LINUX
-	bool "Mali Midgard for Linux only"
+ifeq ($(KDIR),)
+$(error Must specify KDIR to point to the kernel to target))
+endif
 
-config MALI_MIDGARD_FOR_CROS
-	bool "Mali Midgard for Chrome OS only"
+all:
+	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(CURDIR) $(SCONS_CONFIGS) EXTRA_CFLAGS=-I$(CURDIR)/../include modules
 
-endchoice
-
-source "drivers/gpu/arm/midgard/Kconfig"
-
-choice
-	prompt "Mali bifrost driver"
-
-config MALI_BIFROST_FOR_ANDROID
-	bool "Mali Bifrost for Android"
-
-config MALI_BIFROST_FOR_LINUX
-	bool "Mali Bifrost for Linux only"
-
-endchoice
-
-source "drivers/gpu/arm/bifrost/Kconfig"
+clean:
+	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(CURDIR) clean

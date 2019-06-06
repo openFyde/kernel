@@ -1,5 +1,5 @@
 #
-# (C) COPYRIGHT 2012 ARM Limited. All rights reserved.
+# (C) COPYRIGHT 2010-2011, 2013, 2017 ARM Limited. All rights reserved.
 #
 # This program is free software and is provided to you under the terms of the
 # GNU General Public License version 2 as published by the Free Software
@@ -18,34 +18,27 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 #
-#
-source "drivers/gpu/arm/mali400/mali/Kconfig"
 
-choice
-	prompt "Mali Midgard driver"
+Import ('env')
 
-config MALI_MIDGARD_FOR_ANDROID
-	bool "Mali Midgard for Android"
+kutf_env = env.Clone()
+kutf_env.Append(CPPPATH = '#kernel/drivers/gpu/arm/midgard/tests/include')
+Export('kutf_env')
 
-config MALI_MIDGARD_FOR_LINUX
-	bool "Mali Midgard for Linux only"
+if Glob('internal/sconscript'):
+	SConscript('internal/sconscript')
 
-config MALI_MIDGARD_FOR_CROS
-	bool "Mali Midgard for Chrome OS only"
+if kutf_env['debug'] == '1':
+	SConscript('kutf/sconscript')
+	SConscript('mali_kutf_irq_test/sconscript')
 
-endchoice
+	if Glob('kutf_test/sconscript'):
+		SConscript('kutf_test/sconscript')
 
-source "drivers/gpu/arm/midgard/Kconfig"
+	if Glob('kutf_test_runner/sconscript'):
+		SConscript('kutf_test_runner/sconscript')
 
-choice
-	prompt "Mali bifrost driver"
-
-config MALI_BIFROST_FOR_ANDROID
-	bool "Mali Bifrost for Android"
-
-config MALI_BIFROST_FOR_LINUX
-	bool "Mali Bifrost for Linux only"
-
-endchoice
-
-source "drivers/gpu/arm/bifrost/Kconfig"
+if env['unit'] == '1':
+	SConscript('mali_kutf_ipa_test/sconscript')
+	SConscript('mali_kutf_ipa_unit_test/sconscript')
+	SConscript('mali_kutf_vinstr_test/sconscript')

@@ -1,5 +1,5 @@
 #
-# (C) COPYRIGHT 2012 ARM Limited. All rights reserved.
+# (C) COPYRIGHT 2017 ARM Limited. All rights reserved.
 #
 # This program is free software and is provided to you under the terms of the
 # GNU General Public License version 2 as published by the Free Software
@@ -18,34 +18,12 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 #
-#
-source "drivers/gpu/arm/mali400/mali/Kconfig"
 
-choice
-	prompt "Mali Midgard driver"
-
-config MALI_MIDGARD_FOR_ANDROID
-	bool "Mali Midgard for Android"
-
-config MALI_MIDGARD_FOR_LINUX
-	bool "Mali Midgard for Linux only"
-
-config MALI_MIDGARD_FOR_CROS
-	bool "Mali Midgard for Chrome OS only"
-
-endchoice
-
-source "drivers/gpu/arm/midgard/Kconfig"
-
-choice
-	prompt "Mali bifrost driver"
-
-config MALI_BIFROST_FOR_ANDROID
-	bool "Mali Bifrost for Android"
-
-config MALI_BIFROST_FOR_LINUX
-	bool "Mali Bifrost for Linux only"
-
-endchoice
-
-source "drivers/gpu/arm/bifrost/Kconfig"
+config MALI_IRQ_LATENCY
+ tristate "Mali GPU IRQ latency measurement"
+ depends on MALI_MIDGARD && MALI_DEBUG && MALI_KUTF
+ default m
+ help
+   This option will build a test module mali_kutf_irq_test that
+   can determine the latency of the Mali GPU IRQ on your system.
+   Choosing M here will generate a single module called mali_kutf_irq_test.
