@@ -18,13 +18,13 @@
 
 #include <linux/clk.h>
 
-#include "rk3288_vpu_regs.h"
+#include "rk3399_vpu_regs.h"
 
 /*
  * Supported formats.
  */
 
-static const struct rockchip_vpu_fmt rk3288_vpu_enc_fmts[] = {
+static const struct rockchip_vpu_fmt rk3399_vpu_enc_fmts[] = {
 	/* Source formats. */
 	{
 		.name = "4:2:0 3 planes Y/Cb/Cr",
@@ -87,9 +87,23 @@ static const struct rockchip_vpu_fmt rk3288_vpu_enc_fmts[] = {
 			.step_height = MB_DIM,
 		},
 	},
+	{
+		.name = "JPEG Encoded Stream",
+		.fourcc = V4L2_PIX_FMT_JPEG_RAW,
+		.codec_mode = RK_VPU_CODEC_JPEGE,
+		.num_planes = 1,
+		.frmsize = {
+			.min_width = 96,
+			.max_width = 8192,
+			.step_width = MB_DIM,
+			.min_height = 32,
+			.max_height = 8192,
+			.step_height = MB_DIM,
+		},
+	},
 };
 
-static const struct rockchip_vpu_fmt rk3288_vpu_dec_fmts[] = {
+static const struct rockchip_vpu_fmt rk3399_vpu_dec_fmts[] = {
 	{
 		.name = "4:2:0 1 plane Y/CbCr",
 		.fourcc = V4L2_PIX_FMT_NV12,
@@ -98,30 +112,16 @@ static const struct rockchip_vpu_fmt rk3288_vpu_dec_fmts[] = {
 		.depth = { 12 },
 	},
 	{
-		.name = "Slices of H264 Encoded Stream",
-		.fourcc = V4L2_PIX_FMT_H264_SLICE,
-		.codec_mode = RK_VPU_CODEC_H264D,
-		.num_planes = 1,
-		.frmsize = {
-			.min_width = 48,
-			.max_width = 3840,
-			.step_width = MB_DIM,
-			.min_height = 48,
-			.max_height = 2160,
-			.step_height = MB_DIM,
-		},
-	},
-	{
 		.name = "Frames of VP8 Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_VP8_FRAME,
 		.codec_mode = RK_VPU_CODEC_VP8D,
 		.num_planes = 1,
 		.frmsize = {
 			.min_width = 48,
-			.max_width = 3840,
+			.max_width = 1920,
 			.step_width = MB_DIM,
 			.min_height = 48,
-			.max_height = 2160,
+			.max_height = 1088,
 			.step_height = MB_DIM,
 		},
 	},
@@ -131,10 +131,13 @@ static const struct rockchip_vpu_fmt rk3288_vpu_dec_fmts[] = {
  * Interrupt handlers.
  */
 
-static irqreturn_t rk3288_vepu_irq(int irq, void *dev_id)
+static irqreturn_t rk3399_vepu_irq(int irq, void *dev_id)
 {
 	struct rockchip_vpu_dev *vpu = dev_id;
-	u32 status = vepu_read(vpu, VEPU_REG_INTERRUPT);
+	u32 status;
+	
+	vpu_debug_enter();
+	status = vepu_read(vpu, VEPU_REG_INTERRUPT);
 
 	vepu_write(vpu, 0, VEPU_REG_INTERRUPT);
 
@@ -144,23 +147,29 @@ static irqreturn_t rk3288_vepu_irq(int irq, void *dev_id)
 		rockchip_vpu_irq_done(vpu);
 	}
 
+	vpu_debug_leave();
+
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t rk3288_vdpu_irq(int irq, void *dev_id)
+static irqreturn_t rk3399_vdpu_irq(int irq, void *dev_id)
 {
 	struct rockchip_vpu_dev *vpu = dev_id;
-	u32 status = vdpu_read(vpu, VDPU_REG_INTERRUPT);
+	u32 status;
+	
+	vpu_debug_enter();
+	status = vdpu_read(vpu, VDPU_REG_INTERRUPT);
 
 	vdpu_write(vpu, 0, VDPU_REG_INTERRUPT);
 
 	vpu_debug(3, "vdpu_irq status: %08x\n", status);
 
 	if (status & VDPU_REG_INTERRUPT_DEC_IRQ) {
-		vdpu_write(vpu, 0, VDPU_REG_CONFIG);
+		vdpu_write(vpu, 0, VDPU_REG_AXI_CTRL);
 
 		rockchip_vpu_irq_done(vpu);
 	}
+	vpu_debug_leave();
 
 	return IRQ_HANDLED;
 }
@@ -169,7 +178,7 @@ static irqreturn_t rk3288_vdpu_irq(int irq, void *dev_id)
  * Initialization/clean-up.
  */
 
-static int rk3288_vpu_hw_probe(struct rockchip_vpu_dev *vpu)
+static int rk3399_vpu_hw_probe(struct rockchip_vpu_dev *vpu)
 {
 	struct resource *res;
 	int irq_enc, irq_dec;
@@ -215,7 +224,7 @@ static int rk3288_vpu_hw_probe(struct rockchip_vpu_dev *vpu)
 	}
 
 	ret = devm_request_threaded_irq(vpu->dev, irq_enc, NULL,
-					rk3288_vepu_irq, IRQF_ONESHOT,
+					rk3399_vepu_irq, IRQF_ONESHOT,
 					dev_name(vpu->dev), vpu);
 	if (ret) {
 		dev_err(vpu->dev, "could not request vepu IRQ\n");
@@ -229,7 +238,7 @@ static int rk3288_vpu_hw_probe(struct rockchip_vpu_dev *vpu)
 	}
 
 	ret = devm_request_threaded_irq(vpu->dev, irq_dec, NULL,
-					rk3288_vdpu_irq, IRQF_ONESHOT,
+					rk3399_vdpu_irq, IRQF_ONESHOT,
 					dev_name(vpu->dev), vpu);
 	if (ret) {
 		dev_err(vpu->dev, "could not request vdpu IRQ\n");
@@ -239,67 +248,66 @@ static int rk3288_vpu_hw_probe(struct rockchip_vpu_dev *vpu)
 	return 0;
 }
 
-static void rk3288_vpu_clk_enable(struct rockchip_vpu_dev *vpu)
+static void rk3399_vpu_clk_enable(struct rockchip_vpu_dev *vpu)
 {
 	clk_prepare_enable(vpu->aclk);
 	clk_prepare_enable(vpu->hclk);
 }
 
-static void rk3288_vpu_clk_disable(struct rockchip_vpu_dev *vpu)
+static void rk3399_vpu_clk_disable(struct rockchip_vpu_dev *vpu)
 {
 	clk_disable_unprepare(vpu->hclk);
 	clk_disable_unprepare(vpu->aclk);
 }
 
-static void rk3288_vpu_enc_reset(struct rockchip_vpu_ctx *ctx)
+static void rk3399_vpu_enc_reset(struct rockchip_vpu_ctx *ctx)
 {
 	struct rockchip_vpu_dev *vpu = ctx->dev;
 
 	vepu_write(vpu, VEPU_REG_INTERRUPT_DIS_BIT, VEPU_REG_INTERRUPT);
-	vepu_write(vpu, 0, VEPU_REG_ENC_CTRL);
+	vepu_write(vpu, 0, VEPU_REG_ENCODE_START);
 	vepu_write(vpu, 0, VEPU_REG_AXI_CTRL);
 }
 
-static void rk3288_vpu_dec_reset(struct rockchip_vpu_ctx *ctx)
+static void rk3399_vpu_dec_reset(struct rockchip_vpu_ctx *ctx)
 {
 	struct rockchip_vpu_dev *vpu = ctx->dev;
 
 	vdpu_write(vpu, VDPU_REG_INTERRUPT_DEC_IRQ_DIS, VDPU_REG_INTERRUPT);
-	vdpu_write(vpu, 0, VDPU_REG_CONFIG);
+	vdpu_write(vpu, 0, VDPU_REG_EN_FLAGS);
+	vdpu_write(vpu, 1, VDPU_REG_SOFT_RESET);
 }
 
 /*
  * Supported codec ops.
  */
 
-static const struct rockchip_vpu_codec_ops rk3288_vpu_mode_ops[] = {
+static const struct rockchip_vpu_codec_ops rk3399_vpu_mode_ops[] = {
 	[RK_VPU_CODEC_VP8E] = {
-		.init = rk3288_vpu_vp8e_init,
-		.exit = rk3288_vpu_vp8e_exit,
-		.run = rk3288_vpu_vp8e_run,
-		.done = rk3288_vpu_vp8e_done,
-		.reset = rk3288_vpu_enc_reset,
-	},
+		.init = rk3399_vpu_vp8e_init,
+		.exit = rk3399_vpu_vp8e_exit,
+		.run = rk3399_vpu_vp8e_run,
+		.done = rk3399_vpu_vp8e_done,
+		.reset = rk3399_vpu_enc_reset,
+},
 	[RK_VPU_CODEC_VP8D] = {
-		.init = rk3288_vpu_vp8d_init,
-		.exit = rk3288_vpu_vp8d_exit,
-		.run = rk3288_vpu_vp8d_run,
+		.init = rk3399_vpu_vp8d_init,
+		.exit = rk3399_vpu_vp8d_exit,
+		.run = rk3399_vpu_vp8d_run,
 		.done = rockchip_vpu_run_done,
-		.reset = rk3288_vpu_dec_reset,
+		.reset = rk3399_vpu_dec_reset,
 	},
 	[RK_VPU_CODEC_H264E] = {
-		.init = rk3288_vpu_h264e_init,
-		.exit = rk3288_vpu_h264e_exit,
-		.run = rk3288_vpu_h264e_run,
-		.done = rk3288_vpu_h264e_done,
-		.reset = rk3288_vpu_enc_reset,
+		.init = rk3399_vpu_h264e_init,
+		.exit = rk3399_vpu_h264e_exit,
+		.run = rk3399_vpu_h264e_run,
+		.done = rk3399_vpu_h264e_done,
+		.reset = rk3399_vpu_enc_reset,
 	},
-	[RK_VPU_CODEC_H264D] = {
-		.init = rk3288_vpu_h264d_init,
-		.exit = rk3288_vpu_h264d_exit,
-		.run = rk3288_vpu_h264d_run,
-		.done = rockchip_vpu_run_done,
-		.reset = rk3288_vpu_dec_reset,
+	[RK_VPU_CODEC_JPEGE] = {
+		.run = rk3399_vpu_jpege_run,
+		.done = rk3399_vpu_jpege_done,
+		.reset = rk3399_vpu_enc_reset,
 	},
 };
 
@@ -307,17 +315,15 @@ static const struct rockchip_vpu_codec_ops rk3288_vpu_mode_ops[] = {
  * VPU variant.
  */
 
-const struct rockchip_vpu_variant rk3288_vpu_variant = {
+const struct rockchip_vpu_variant rk3399_vpu_variant = {
 	.enc_offset = 0x0,
 	.dec_offset = 0x400,
-	.needs_enc_after_dec_war = 1,
-	.needs_dpb_map = 1,
-	.enc_fmts = rk3288_vpu_enc_fmts,
-	.num_enc_fmts = ARRAY_SIZE(rk3288_vpu_enc_fmts),
-	.dec_fmts = rk3288_vpu_dec_fmts,
-	.num_dec_fmts = ARRAY_SIZE(rk3288_vpu_dec_fmts),
-	.mode_ops = rk3288_vpu_mode_ops,
-	.hw_probe = rk3288_vpu_hw_probe,
-	.clk_enable = rk3288_vpu_clk_enable,
-	.clk_disable = rk3288_vpu_clk_disable,
+	.enc_fmts = rk3399_vpu_enc_fmts,
+	.num_enc_fmts = ARRAY_SIZE(rk3399_vpu_enc_fmts),
+	.dec_fmts = rk3399_vpu_dec_fmts,
+	.num_dec_fmts = ARRAY_SIZE(rk3399_vpu_dec_fmts),
+	.mode_ops = rk3399_vpu_mode_ops,
+	.hw_probe = rk3399_vpu_hw_probe,
+	.clk_enable = rk3399_vpu_clk_enable,
+	.clk_disable = rk3399_vpu_clk_disable,
 };

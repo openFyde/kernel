@@ -1,5 +1,5 @@
 /*
- * Rockchip rk3288 VPU codec driver
+ * Rockchip rk3399 VPU codec driver
  *
  * Copyright (C) 2016 Rockchip Electronics Co., Ltd.
  *	Alpha Lin <Alpha.Lin@rock-chips.com>
@@ -20,7 +20,7 @@
 #include <linux/types.h>
 #include <linux/sort.h>
 
-#include "rk3288_vpu_regs.h"
+#include "rk3399_vpu_regs.h"
 #include "rockchip_vpu_hw.h"
 
 /* H.264 motion estimation parameters */
@@ -722,7 +722,7 @@ static void buffer_cpu_to_be64(u64 *buf, u32 size)
 
 #define CLIP3(v, min, max)  ((v) < (min) ? (min) : ((v) > (max) ? (max) : (v)))
 
-static void rk3288_vpu_h264e_init_cabac_table(struct rockchip_vpu_ctx *ctx)
+static void rk3399_vpu_h264e_init_cabac_table(struct rockchip_vpu_ctx *ctx)
 {
 	u8 *table;
 
@@ -744,7 +744,7 @@ static void rk3288_vpu_h264e_init_cabac_table(struct rockchip_vpu_ctx *ctx)
 
 					s32 pre_ctx_st =
 						CLIP3(((m * qp) >> 4) + n,
-						1, 126);
+							1, 126);
 					int idx = qp * 464 * 2 + j * 464 + i;
 
 					if (pre_ctx_st <= 63)
@@ -763,12 +763,7 @@ static void rk3288_vpu_h264e_init_cabac_table(struct rockchip_vpu_ctx *ctx)
 	}
 }
 
-static inline unsigned int ref_luma_size(unsigned int w, unsigned int h)
-{
-	return round_up(w, MB_DIM) * round_up(h, MB_DIM);
-}
-
-int rk3288_vpu_h264e_init(struct rockchip_vpu_ctx *ctx)
+int rk3399_vpu_h264e_init(struct rockchip_vpu_ctx *ctx)
 {
 	struct rockchip_vpu_dev *vpu = ctx->dev;
 	size_t ref_buf_size;
@@ -797,9 +792,9 @@ int rk3288_vpu_h264e_init(struct rockchip_vpu_ctx *ctx)
 		goto err_ext_buf_alloc;
 	}
 
-	rk3288_vpu_h264e_init_cabac_table(ctx);
+	rk3399_vpu_h264e_init_cabac_table(ctx);
 
-	return 0;
+	return ret;
 
 err_ext_buf_alloc:
 	for (i = 0; i < H264E_CABAC_IDC_NUM; i++)
@@ -813,7 +808,7 @@ err_cabac_tbl_alloc:
 	return ret;
 }
 
-void rk3288_vpu_h264e_exit(struct rockchip_vpu_ctx *ctx)
+void rk3399_vpu_h264e_exit(struct rockchip_vpu_ctx *ctx)
 {
 	struct rockchip_vpu_dev *vpu = ctx->dev;
 	int i;
@@ -828,14 +823,19 @@ void rk3288_vpu_h264e_exit(struct rockchip_vpu_ctx *ctx)
 	vpu_debug_leave();
 }
 
-static void rk3288_vpu_h264e_set_buffers(struct rockchip_vpu_dev *vpu,
+static void rk3399_vpu_h264e_set_buffers(struct rockchip_vpu_dev *vpu,
 		struct rockchip_vpu_ctx *ctx)
 {
+	const u32 src_addr_regs[] = { VEPU_REG_ADDR_IN_LUMA,
+				      VEPU_REG_ADDR_IN_CB,
+				      VEPU_REG_ADDR_IN_CR };
 	const struct rk3288_h264e_reg_params *params =
 		(struct rk3288_h264e_reg_params *)ctx->run.h264e.reg_params;
+	struct v4l2_pix_format_mplane *src_fmt = &ctx->src_fmt;
 	dma_addr_t ref_buf_dma, rec_buf_dma;
 	size_t rounded_size;
 	dma_addr_t dst_dma;
+	int i;
 
 	dma_addr_t cabac_dma =
 		ctx->hw.h264e.cabac_tbl[params->cabac_init_idc].dma;
@@ -864,16 +864,17 @@ static void rk3288_vpu_h264e_set_buffers(struct rockchip_vpu_dev *vpu,
 	vepu_write_relaxed(vpu, rec_buf_dma + rounded_size,
 			VEPU_REG_ADDR_REC_CHROMA);
 
-	vepu_write_relaxed(vpu, vb2_dma_contig_plane_dma_addr(
-				&ctx->run.src->b.vb2_buf, PLANE_Y),
-			VEPU_REG_ADDR_IN_LUMA);
-	vepu_write_relaxed(vpu, vb2_dma_contig_plane_dma_addr(
-				&ctx->run.src->b.vb2_buf, PLANE_CB),
-			VEPU_REG_ADDR_IN_CB);
-	vepu_write_relaxed(vpu, vb2_dma_contig_plane_dma_addr(
-				&ctx->run.src->b.vb2_buf, PLANE_CR),
-			VEPU_REG_ADDR_IN_CR);
-
+	/*
+	 * TODO(crbug.com/901264): The way to pass an offset within a DMA-buf
+	 * is not defined in V4L2 specification, so we abuse data_offset
+	 * for now. Fix it when we have the right interface, including
+	 * any necessary validation and potential alignment issues.
+	 */
+	for (i = 0; i < src_fmt->num_planes; ++i)
+		vepu_write_relaxed(vpu, vb2_dma_contig_plane_dma_addr(
+				   &ctx->run.src->b.vb2_buf, i) +
+				ctx->run.src->b.vb2_buf.planes[i].data_offset,
+				   src_addr_regs[i]);
 }
 
 static s32 exp_golomb_signed(s32 val)
@@ -891,7 +892,7 @@ static s32 exp_golomb_signed(s32 val)
 	return tmp * 2 - 1;
 }
 
-static void rk3288_vpu_h264e_set_params(struct rockchip_vpu_dev *vpu,
+static void rk3399_vpu_h264e_set_params(struct rockchip_vpu_dev *vpu,
 		struct rockchip_vpu_ctx *ctx)
 {
 	const struct rk3288_h264e_reg_params *params =
@@ -904,7 +905,8 @@ static void rk3288_vpu_h264e_set_params(struct rockchip_vpu_dev *vpu,
 	u32 mbs_in_row = MB_WIDTH(ctx->src_fmt.width);
 	u32 mbs_in_col = MB_HEIGHT(ctx->src_fmt.height);
 	struct v4l2_rect *crop = &ctx->src_crop;
-	u32 overfill_r, overfill_b, bytes_per_line;
+	u32 overfill_r, overfill_b;
+	u32 constrained_intra_prediction = 0;
 	u32 skip_penalty;
 
 	u8 dmv_penalty[128];
@@ -917,91 +919,53 @@ static void rk3288_vpu_h264e_set_params(struct rockchip_vpu_dev *vpu,
 	 * values of other planes are calculated internally based on
 	 * format setting.
 	 */
-	bytes_per_line = pix_fmt->plane_fmt[0].bytesperline;
 	overfill_r = (pix_fmt->width - crop->width) / 4;
 	overfill_b = pix_fmt->height - crop->height;
 
-	reg = VEPU_REG_IN_IMG_CTRL_ROW_LEN(bytes_per_line)
-		| VEPU_REG_IN_IMG_CTRL_OVRFLR_D4(overfill_r)
-		| VEPU_REG_IN_IMG_CTRL_OVRFLB_D4(overfill_b)
-		| VEPU_REG_IN_IMG_CTRL_FMT(ctx->vpu_src_fmt->enc_fmt);
-	vepu_write_relaxed(vpu, reg, VEPU_REG_IN_IMG_CTRL);
-
-	reg = VEPU_REG_ENC_CTRL0_INIT_QP(params->pic_init_qp) |
-		VEPU_REG_ENC_CTRL0_SLICE_ALPHA(params->slice_alpha_offset) |
-		VEPU_REG_ENC_CTRL0_SLICE_BETA(params->slice_beta_offset) |
-		VEPU_REG_ENC_CTRL0_CHROMA_QP_OFFSET(
-			params->chroma_qp_index_offset) |
-		VEPU_REG_ENC_CTRL0_FILTER_DIS(params->filter_disable) |
-		VEPU_REG_ENC_CTRL0_IDR_PICID(params->idr_pic_id);
-	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL0);
-
-	reg = VEPU_REG_ENC_CTRL1_PPS_ID(params->pps_id) |
-		VEPU_REG_ENC_CTRL1_INTRA_PRED_MODE(prev_mode_favor) |
-		VEPU_REG_ENC_CTRL1_FRAME_NUM(params->frame_num);
-
-	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL1);
-
-	reg = VEPU_REG_ENC_CTRL2_H264_SLICE_SIZE(params->slice_size_mb_rows) |
-		VEPU_REG_ENC_CTRL2_CABAC_INIT_IDC(params->cabac_init_idc) |
-		VEPU_REG_ENC_CTRL2_INTRA16X16_MODE(
-			h264_intra16_favor[params->qp]);
-
-	if (params->h264_inter4x4_disabled)
-		reg |= VEPU_REG_ENC_CTRL2_H264_INTER4X4_MODE;
-	if (params->enable_cabac)
-		reg |= VEPU_REG_ENC_CTRL2_ENTROPY_CODING_MODE;
-	if (params->transform8x8_mode)
-		reg |= VEPU_REG_ENC_CTRL2_TRANS8X8_MODE_EN;
-	if (mbs_in_row * mbs_in_col > 3600)
-		reg |= VEPU_REG_ENC_CTRL2_DISABLE_QUARTER_PIXMV;
-
-	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL2);
-
-	scaler = max(1U, 200 / (mbs_in_row + mbs_in_col));
-	skip_penalty = min(255U, h264_skip_sad_penalty[params->qp] * scaler);
-
-	diff_mv_penalty[0] = h264_diff_mv_penalty4p[params->qp];
-	diff_mv_penalty[1] = h264_diff_mv_penalty[params->qp];
-	diff_mv_penalty[2] = h264_diff_mv_penalty[params->qp];
-	split_penalty[0] = 0;
-	split_penalty[1] = 0;
-	split_penalty[2] = 0;
-	split_penalty[3] = 0;
-
-	reg = VEPU_REG_ENC_CTRL3_MUTIMV_EN |
-		VEPU_REG_ENC_CTRL3_MV_PENALTY_1_4P(split_penalty[2]) |
-		VEPU_REG_ENC_CTRL3_MV_PENALTY_4P(diff_mv_penalty[0]) |
-		VEPU_REG_ENC_CTRL3_MV_PENALTY_1P(diff_mv_penalty[1]);
-
-	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL3);
-
-	reg = VEPU_REG_MVC_CTRL_MV16X16_FAVOR(10);
-
-	vepu_write_relaxed(vpu, reg, VEPU_REG_MVC_CTRL);
-
-	vepu_write_relaxed(vpu, 0, VEPU_REG_ENC_CTRL4);
-
-	reg = VEPU_REG_ENC_CTRL5_MACROBLOCK_PENALTY(skip_penalty) |
-		VEPU_REG_ENC_CTRL5_INTER_MODE(h264_inter_favor[params->qp]);
-	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL5);
+	vepu_write_relaxed(vpu, 0, VEPU_REG_INTRA_AREA_CTRL);
 
 	vepu_write_relaxed(vpu, 0, VEPU_REG_STR_HDR_REM_MSB);
 	vepu_write_relaxed(vpu, 0, VEPU_REG_STR_HDR_REM_LSB);
 	vepu_write_relaxed(vpu, vb2_plane_size(&ctx->run.dst->b.vb2_buf, 0),
-			VEPU_REG_STR_BUF_LIMIT);
+			   VEPU_REG_STR_BUF_LIMIT);
 
-	reg = VEPU_REG_MAD_CTRL_QP_ADJUST(params->mad_qp_delta) |
-		VEPU_REG_MAD_CTRL_MAD_THREDHOLD(params->mad_threshold);
+	reg = VEPU_REG_AXI_CTRL_READ_ID(0);
+	reg |= VEPU_REG_AXI_CTRL_WRITE_ID(0);
+	reg |= VEPU_REG_AXI_CTRL_BURST_LEN(16);
+	reg |= VEPU_REG_AXI_CTRL_INCREMENT_MODE(0);
+	reg |= VEPU_REG_AXI_CTRL_BIRST_DISCARD(0);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_AXI_CTRL);
 
-	vepu_write_relaxed(vpu, reg, VEPU_REG_MAD_CTRL);
+	vepu_write_relaxed(vpu, params->mad_qp_delta,
+			   VEPU_QP_ADJUST_MAD_DELTA_ROI);
 
-	reg = VEPU_REG_QP_VAL_LUM(params->qp) |
-		VEPU_REG_QP_VAL_MAX(params->qp_max) |
-		VEPU_REG_QP_VAL_MIN(params->qp_min) |
-		VEPU_REG_QP_VAL_CHECKPOINT_DISTAN(params->cp_distance_mbs);
+	scaler = max(1U, 200 / (mbs_in_row + mbs_in_col));
+	skip_penalty = min(255U, h264_skip_sad_penalty[params->qp] * scaler);
 
-	vepu_write_relaxed(vpu, reg, VEPU_REG_QP_VAL);
+	reg = 0;
+	if (mbs_in_row * mbs_in_col > 3600)
+		reg = VEPU_REG_DISABLE_QUARTER_PIXEL_MV;
+	reg |= VEPU_REG_CABAC_INIT_IDC(params->cabac_init_idc);
+	if (params->enable_cabac)
+		reg |= VEPU_REG_ENTROPY_CODING_MODE;
+	if (params->transform8x8_mode)
+		reg |= VEPU_REG_H264_TRANS8X8_MODE;
+	if (params->h264_inter4x4_disabled)
+		reg |= VEPU_REG_H264_INTER4X4_MODE;
+	/*reg |= VEPU_REG_H264_STREAM_MODE;*/
+	reg |= VEPU_REG_H264_SLICE_SIZE(params->slice_size_mb_rows);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL0);
+
+	reg = VEPU_REG_STREAM_START_OFFSET(0) |
+			VEPU_REG_SKIP_MACROBLOCK_PENALTY(skip_penalty) |
+			VEPU_REG_IN_IMG_CTRL_OVRFLR_D4(overfill_r) |
+			VEPU_REG_IN_IMG_CTRL_OVRFLB(overfill_b);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_OVER_FILL_STRM_OFFSET);
+
+	reg = VEPU_REG_IN_IMG_CHROMA_OFFSET(0)
+		| VEPU_REG_IN_IMG_LUMA_OFFSET(0)
+		| VEPU_REG_IN_IMG_CTRL_ROW_LEN(mbs_in_row * 16);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_INPUT_LUMA_INFO);
 
 	reg = VEPU_REG_CHECKPOINT_CHECK1(params->cp_target[0])
 		| VEPU_REG_CHECKPOINT_CHECK0(params->cp_target[1]);
@@ -1044,21 +1008,77 @@ static void rk3288_vpu_h264e_set_params(struct rockchip_vpu_dev *vpu,
 		| VEPU_REG_CHKPT_DELTA_QP_CHK0(params->delta_qp[0]);
 	vepu_write_relaxed(vpu, reg, VEPU_REG_CHKPT_DELTA_QP);
 
-	vepu_write_relaxed(vpu, 0, VEPU_REG_RLC_CTRL);
+	reg = VEPU_REG_MAD_THRESHOLD(params->mad_threshold)
+		| VEPU_REG_IN_IMG_CTRL_FMT(ctx->vpu_src_fmt->enc_fmt)
+		| VEPU_REG_IN_IMG_ROTATE_MODE(0);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL1);
+
+	reg = VEPU_REG_INTRA16X16_MODE(h264_intra16_favor[params->qp])
+		| VEPU_REG_INTER_MODE(h264_inter_favor[params->qp]);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_INTRA_INTER_MODE);
+
+	reg = VEPU_REG_PPS_INIT_QP(params->pic_init_qp)
+		| VEPU_REG_SLICE_FILTER_ALPHA(params->slice_alpha_offset)
+		| VEPU_REG_SLICE_FILTER_BETA(params->slice_beta_offset)
+		| VEPU_REG_CHROMA_QP_OFFSET(params->chroma_qp_index_offset)
+		| VEPU_REG_IDR_PIC_ID(params->idr_pic_id);
+
+	if (params->filter_disable)
+		reg |= VEPU_REG_FILTER_DISABLE;
+
+	if (constrained_intra_prediction)
+		reg |= VEPU_REG_CONSTRAINED_INTRA_PREDICTION;
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL2);
 
 	vepu_write_relaxed(vpu, 0, VEPU_REG_ADDR_NEXT_PIC);
-	vepu_write_relaxed(vpu, 0, VEPU_REG_STABILIZATION_OUTPUT);
-
 	vepu_write_relaxed(vpu, 0, VEPU_REG_ADDR_MV_OUT);
-
-	vepu_write_relaxed(vpu, 0, VEPU_REG_RGB_YUV_COEFF(0));
-	vepu_write_relaxed(vpu, 0, VEPU_REG_RGB_YUV_COEFF(1));
+	vepu_write_relaxed(vpu, 0, VEPU_REG_ROI1);
+	vepu_write_relaxed(vpu, 0, VEPU_REG_ROI2);
+	vepu_write_relaxed(vpu, 0, VEPU_REG_STABILIZATION_OUTPUT);
+	vepu_write_relaxed(vpu, 0, VEPU_REG_RGB2YUV_CONVERSION_COEF1);
+	vepu_write_relaxed(vpu, 0, VEPU_REG_RGB2YUV_CONVERSION_COEF2);
+	vepu_write_relaxed(vpu, 0, VEPU_REG_RGB2YUV_CONVERSION_COEF3);
 	vepu_write_relaxed(vpu, 0, VEPU_REG_RGB_MASK_MSB);
 
-	vepu_write_relaxed(vpu, 0, VEPU_REG_INTRA_AREA_CTRL);
+	diff_mv_penalty[0] = h264_diff_mv_penalty4p[params->qp];
+	diff_mv_penalty[1] = h264_diff_mv_penalty[params->qp];
+	diff_mv_penalty[2] = h264_diff_mv_penalty[params->qp];
+	split_penalty[0] = 0;
+	split_penalty[1] = 0;
+	split_penalty[2] = 0;
+	split_penalty[3] = 0;
 
-	vepu_write_relaxed(vpu, 0, VEPU_REG_FIRST_ROI_AREA);
-	vepu_write_relaxed(vpu, 0, VEPU_REG_SECOND_ROI_AREA);
+	reg = VEPU_REG_1MV_PENALTY(diff_mv_penalty[1])
+		| VEPU_REG_QMV_PENALTY(diff_mv_penalty[2])
+		| VEPU_REG_4MV_PENALTY(diff_mv_penalty[0]);
+
+	reg |= VEPU_REG_SPLIT_MV_MODE_EN;
+	vepu_write_relaxed(vpu, reg, VEPU_REG_MV_PENALTY);
+
+	reg = VEPU_REG_H264_LUMA_INIT_QP(params->qp)
+		| VEPU_REG_H264_QP_MAX(params->qp_max)
+		| VEPU_REG_H264_QP_MIN(params->qp_min)
+		| VEPU_REG_H264_CHKPT_DISTANCE(params->cp_distance_mbs);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_QP_VAL);
+
+	reg = VEPU_REG_ZERO_MV_FAVOR_D2(10);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_MVC_RELATE);
+
+	reg = VEPU_REG_OUTPUT_SWAP32
+		| VEPU_REG_OUTPUT_SWAP16
+		| VEPU_REG_OUTPUT_SWAP8
+		| VEPU_REG_INPUT_SWAP8
+		| VEPU_REG_INPUT_SWAP16
+		| VEPU_REG_INPUT_SWAP32;
+	vepu_write_relaxed(vpu, reg, VEPU_REG_DATA_ENDIAN);
+
+	reg = VEPU_REG_PPS_ID(params->pps_id)
+		| VEPU_REG_INTRA_PRED_MODE(prev_mode_favor)
+		| VEPU_REG_FRAME_NUM(params->frame_num);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL3);
+
+	reg = VEPU_REG_INTERRUPT_TIMEOUT_EN;
+	vepu_write_relaxed(vpu, reg, VEPU_REG_INTERRUPT);
 
 	for (i = 0; i < 128; i++) {
 		dmv_penalty[i] = i;
@@ -1066,26 +1086,26 @@ static void rk3288_vpu_h264e_set_params(struct rockchip_vpu_dev *vpu,
 	}
 
 	for (i = 0; i < 128; i += 4) {
-		reg = VEPU_REG_DMV_4P_1P_PENALTY_BIT(dmv_penalty[i], 3);
-		reg |= VEPU_REG_DMV_4P_1P_PENALTY_BIT(dmv_penalty[i + 1], 2);
-		reg |= VEPU_REG_DMV_4P_1P_PENALTY_BIT(dmv_penalty[i + 2], 1);
-		reg |= VEPU_REG_DMV_4P_1P_PENALTY_BIT(dmv_penalty[i + 3], 0);
-		vepu_write_relaxed(vpu, reg, VEPU_REG_DMV_4P_1P_PENALTY(i / 4));
+		reg = VEPU_REG_DMV_PENALTY_TABLE_BIT(dmv_penalty[i], 3);
+		reg |= VEPU_REG_DMV_PENALTY_TABLE_BIT(dmv_penalty[i + 1], 2);
+		reg |= VEPU_REG_DMV_PENALTY_TABLE_BIT(dmv_penalty[i + 2], 1);
+		reg |= VEPU_REG_DMV_PENALTY_TABLE_BIT(dmv_penalty[i + 3], 0);
+		vepu_write_relaxed(vpu, reg, VEPU_REG_DMV_PENALTY_TBL(i / 4));
 
-		reg = VEPU_REG_DMV_QPEL_PENALTY_BIT(
-				dmv_qpel_penalty[i], 3);
-		reg |= VEPU_REG_DMV_QPEL_PENALTY_BIT(
-				dmv_qpel_penalty[i + 1], 2);
-		reg |= VEPU_REG_DMV_QPEL_PENALTY_BIT(
-				dmv_qpel_penalty[i + 2], 1);
-		reg |= VEPU_REG_DMV_QPEL_PENALTY_BIT(
-				dmv_qpel_penalty[i + 3], 0);
+		reg = VEPU_REG_DMV_Q_PIXEL_PENALTY_TABLE_BIT(
+			dmv_qpel_penalty[i], 3);
+		reg |= VEPU_REG_DMV_Q_PIXEL_PENALTY_TABLE_BIT(
+			dmv_qpel_penalty[i + 1], 2);
+		reg |= VEPU_REG_DMV_Q_PIXEL_PENALTY_TABLE_BIT(
+			dmv_qpel_penalty[i + 2], 1);
+		reg |= VEPU_REG_DMV_Q_PIXEL_PENALTY_TABLE_BIT(
+			dmv_qpel_penalty[i + 3], 0);
 		vepu_write_relaxed(vpu, reg,
-				VEPU_REG_DMV_QPEL_PENALTY(i / 4));
+				   VEPU_REG_DMV_Q_PIXEL_PENALTY_TBL(i / 4));
 	}
 }
 
-void rk3288_vpu_h264e_run(struct rockchip_vpu_ctx *ctx)
+void rk3399_vpu_h264e_run(struct rockchip_vpu_ctx *ctx)
 {
 	const struct rk3288_h264e_reg_params *params =
 		(struct rk3288_h264e_reg_params *)ctx->run.h264e.reg_params;
@@ -1102,11 +1122,11 @@ void rk3288_vpu_h264e_run(struct rockchip_vpu_ctx *ctx)
 	rockchip_vpu_power_on(vpu);
 
 	/* Select encode mode first. */
-	vepu_write_relaxed(vpu, VEPU_REG_ENC_CTRL_ENC_MODE_H264,
-			VEPU_REG_ENC_CTRL);
+	reg = VEPU_REG_ENCODE_FORMAT(3);
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENCODE_START);
 
-	rk3288_vpu_h264e_set_params(vpu, ctx);
-	rk3288_vpu_h264e_set_buffers(vpu, ctx);
+	rk3399_vpu_h264e_set_params(vpu, ctx);
+	rk3399_vpu_h264e_set_buffers(vpu, ctx);
 
 	/* Make sure that all registers are written at this point. */
 	wmb();
@@ -1115,33 +1135,20 @@ void rk3288_vpu_h264e_run(struct rockchip_vpu_ctx *ctx)
 	schedule_delayed_work(&vpu->watchdog_work, msecs_to_jiffies(2000));
 
 	/* Start the hardware. */
-	reg = VEPU_REG_AXI_CTRL_OUTPUT_SWAP16
-		| VEPU_REG_AXI_CTRL_INPUT_SWAP16
-		| VEPU_REG_AXI_CTRL_BURST_LEN(16)
-		| VEPU_REG_AXI_CTRL_GATE_BIT
-		| VEPU_REG_AXI_CTRL_OUTPUT_SWAP32
-		| VEPU_REG_AXI_CTRL_INPUT_SWAP32
-		| VEPU_REG_AXI_CTRL_OUTPUT_SWAP8
-		| VEPU_REG_AXI_CTRL_INPUT_SWAP8;
-	vepu_write(vpu, reg, VEPU_REG_AXI_CTRL);
-
-	vepu_write(vpu, 0, VEPU_REG_INTERRUPT);
-
-	reg = VEPU_REG_ENC_CTRL_WIDTH(mbs_in_row)
-		| VEPU_REG_ENC_CTRL_HEIGHT(mbs_in_col)
-		| VEPU_REG_ENC_CTRL_ENC_MODE_H264
+	reg = VEPU_REG_MB_HEIGHT(mbs_in_col)
+		| VEPU_REG_MB_WIDTH(mbs_in_row)
 		| VEPU_REG_PIC_TYPE(params->frame_coding_type)
-		| VEPU_REG_ENC_CTRL_EN_BIT;
+		| VEPU_REG_ENCODE_FORMAT(3)
+		| VEPU_REG_ENCODE_ENABLE;
+	vepu_write_relaxed(vpu, reg, VEPU_REG_ENCODE_START);
 
 	if (params->frame_coding_type)
 		ctx->run.dst->b.flags |= V4L2_BUF_FLAG_KEYFRAME;
 
-	vepu_write_relaxed(vpu, reg, VEPU_REG_ENC_CTRL);
-
 	vpu_debug_leave();
 }
 
-void rk3288_vpu_h264e_done(struct rockchip_vpu_ctx *ctx,
+void rk3399_vpu_h264e_done(struct rockchip_vpu_ctx *ctx,
 		enum vb2_buffer_state result)
 {
 	struct rockchip_vpu_dev *vpu = ctx->dev;
@@ -1155,13 +1162,11 @@ void rk3288_vpu_h264e_done(struct rockchip_vpu_ctx *ctx,
 	vpu_debug_enter();
 
 	feedback->qp_sum =
-		VEPU_REG_MAD_CTRL_QP_SUM_DIV2(
-			vepu_read(vpu, VEPU_REG_MAD_CTRL)) * 2;
+		VEPU_REG_QP_SUM(vepu_read(vpu, VEPU_REG_QP_SUM_DIV2));
 	feedback->mad_count =
-		VEPU_REG_MB_CNT_OUT(vepu_read(vpu, VEPU_REG_MB_CTRL));
+		VEPU_REG_MB_CNT_SET(vepu_read(vpu, VEPU_REG_MB_CTRL));
 	feedback->rlc_count =
-		VEPU_REG_RLC_CTRL_RLC_SUM(
-			vepu_read(vpu, VEPU_REG_RLC_CTRL)) * 4;
+		VEPU_REG_RLC_SUM_OUT(vepu_read(vpu, VEPU_REG_RLC_SUM));
 
 	for (i = 0; i < 10; i++) {
 		u32 cpt = VEPU_REG_CHECKPOINT_RESULT(vepu_read(vpu, reg));

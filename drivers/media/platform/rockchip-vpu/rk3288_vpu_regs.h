@@ -130,7 +130,7 @@
 #define     VEPU_REG_MB_CNT_OUT(x)		(((x) & 0xffff))
 #define     VEPU_REG_MB_CNT_SET(x)		(((x) & 0xffff) << 16)
 #define VEPU_REG_ADDR_NEXT_PIC			0x09c
-#define VEPU_REG_STABLILIZATION_OUTPUT		0x0A0
+#define VEPU_REG_STABILIZATION_OUTPUT		0x0A0
 #define VEPU_REG_ADDR_CABAC_TBL			0x0cc
 #define VEPU_REG_ADDR_MV_OUT			0x0d0
 #define VEPU_REG_RGB_YUV_COEFF(i)		(0x0d4 + ((i) * 0x4))

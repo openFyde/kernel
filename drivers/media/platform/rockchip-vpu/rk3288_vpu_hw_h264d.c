@@ -32,13 +32,13 @@
 /* Size with u32 units. */
 #define CABAC_INIT_BUFFER_SIZE		(460 * 2)
 #define POC_BUFFER_SIZE			34
-#define SCALING_LIST_SIZE		((6 * 16 + 6 * 64) / 4)
+#define SCALING_LIST_SIZE		(6 * 16 + 6 * 64)
 
-/* Data structure describing auxilliary buffer format. */
+/* Data structure describing auxiliary buffer format. */
 struct rk3288_vpu_h264d_priv_tbl {
 	u32 cabac_table[CABAC_INIT_BUFFER_SIZE];
 	u32 poc[POC_BUFFER_SIZE];
-	u32 scaling_list[SCALING_LIST_SIZE];
+	u8 scaling_list[SCALING_LIST_SIZE];
 };
 
 /* Constant CABAC table. */
@@ -219,11 +219,62 @@ void rk3288_vpu_h264d_exit(struct rockchip_vpu_ctx *ctx)
 	rockchip_vpu_aux_buf_free(ctx->dev, &ctx->hw.h264d.priv_tbl);
 }
 
+/*
+ * NOTE: The scaling lists are in zig-zag order, apply inverse scanning process
+ * to get the values in matrix order. In addition, the hardware requires bytes
+ * swapped within each subsequent 4 bytes. Both arrays below include both
+ * transformations.
+ */
+static const u32 zig_zag_4x4[] = {
+	3, 2, 7, 11, 6, 1, 0, 5, 10, 15, 14, 9, 4, 8, 13, 12
+};
+
+static const u32 zig_zag_8x8[] = {
+	3, 2, 11, 19, 10, 1, 0, 9, 18, 27, 35, 26, 17, 8, 7, 6,
+	15, 16, 25, 34, 43, 51, 42, 33, 24, 23, 14, 5, 4, 13, 22, 31,
+	32, 41, 50, 59, 58, 49, 40, 39, 30, 21, 12, 20, 29, 38, 47, 48,
+	57, 56, 55, 46, 37, 28, 36, 45, 54, 63, 62, 53, 44, 52, 61, 60
+};
+
+static void rk3288_vpu_h264d_reorder_scaling_list(struct rockchip_vpu_ctx *ctx)
+{
+	const struct v4l2_ctrl_h264_scaling_matrix *scaling =
+		ctx->run.h264d.scaling_matrix;
+	const size_t num_list_4x4 = ARRAY_SIZE(scaling->scaling_list_4x4);
+	const size_t list_len_4x4 = ARRAY_SIZE(scaling->scaling_list_4x4[0]);
+	const size_t num_list_8x8 = ARRAY_SIZE(scaling->scaling_list_8x8);
+	const size_t list_len_8x8 = ARRAY_SIZE(scaling->scaling_list_8x8[0]);
+	struct rk3288_vpu_h264d_priv_tbl *tbl = ctx->hw.h264d.priv_tbl.cpu;
+	u8 *dst = tbl->scaling_list;
+	const u8 *src;
+	int i, j;
+
+	BUILD_BUG_ON(ARRAY_SIZE(zig_zag_4x4) != list_len_4x4);
+	BUILD_BUG_ON(ARRAY_SIZE(zig_zag_8x8) != list_len_8x8);
+	BUILD_BUG_ON(ARRAY_SIZE(tbl->scaling_list) !=
+		     num_list_4x4 * list_len_4x4 +
+		     num_list_8x8 * list_len_8x8);
+
+	src = &scaling->scaling_list_4x4[0][0];
+	for (i = 0; i < num_list_4x4; ++i) {
+		for (j = 0; j < list_len_4x4; ++j)
+			dst[zig_zag_4x4[j]] = src[j];
+		src += list_len_4x4;
+		dst += list_len_4x4;
+	}
+
+	src = &scaling->scaling_list_8x8[0][0];
+	for (i = 0; i < num_list_8x8; ++i) {
+		for (j = 0; j < list_len_8x8; ++j)
+			dst[zig_zag_8x8[j]] = src[j];
+		src += list_len_8x8;
+		dst += list_len_8x8;
+	}
+}
+
 static void rk3288_vpu_h264d_prepare_table(struct rockchip_vpu_ctx *ctx)
 {
 	struct rk3288_vpu_h264d_priv_tbl *tbl = ctx->hw.h264d.priv_tbl.cpu;
-	const struct v4l2_ctrl_h264_scaling_matrix *scaling =
-						ctx->run.h264d.scaling_matrix;
 	const struct v4l2_ctrl_h264_decode_param *dec_param =
 						ctx->run.h264d.decode_param;
 	const struct v4l2_h264_dpb_entry *dpb = ctx->run.h264d.dpb;
@@ -250,7 +301,7 @@ static void rk3288_vpu_h264d_prepare_table(struct rockchip_vpu_ctx *ctx)
 
 	vpu_debug(2, "poc curr: %08x %08x\n", tbl->poc[32], tbl->poc[33]);
 
-	memcpy(tbl->scaling_list, scaling, sizeof(tbl->scaling_list));
+	rk3288_vpu_h264d_reorder_scaling_list(ctx);
 }
 
 static void rk3288_vpu_h264d_set_params(struct rockchip_vpu_ctx *ctx)
@@ -292,8 +343,9 @@ static void rk3288_vpu_h264d_set_params(struct rockchip_vpu_ctx *ctx)
 	reg = VDPU_REG_DEC_CTRL2_CH_QP_OFFSET(pps->chroma_qp_index_offset)
 		| VDPU_REG_DEC_CTRL2_CH_QP_OFFSET2(
 			pps->second_chroma_qp_index_offset);
-	if (pps->flags & V4L2_H264_PPS_FLAG_PIC_SCALING_MATRIX_PRESENT)
-		reg |= VDPU_REG_DEC_CTRL2_TYPE1_QUANT_E;
+	/* always use the matrix sent from userspace */
+	reg |= VDPU_REG_DEC_CTRL2_TYPE1_QUANT_E;
+
 	if (slice->flags &  V4L2_SLICE_FLAG_FIELD_PIC)
 		reg |= VDPU_REG_DEC_CTRL2_FIELDPIC_FLAG_E;
 	vdpu_write_relaxed(vpu, reg, VDPU_REG_DEC_CTRL2);
@@ -302,7 +354,7 @@ static void rk3288_vpu_h264d_set_params(struct rockchip_vpu_ctx *ctx)
 	reg = VDPU_REG_DEC_CTRL3_START_CODE_E
 		| VDPU_REG_DEC_CTRL3_INIT_QP(pps->pic_init_qp_minus26 + 26)
 		| VDPU_REG_DEC_CTRL3_STREAM_LEN(
-			vb2_get_plane_payload(&ctx->run.src->vb.vb2_buf, 0));
+			vb2_get_plane_payload(&ctx->run.src->b.vb2_buf, 0));
 	vdpu_write_relaxed(vpu, reg, VDPU_REG_DEC_CTRL3);
 
 	/* Decoder control register 4. */
@@ -487,7 +539,7 @@ static void rk3288_vpu_h264d_set_ref(struct rockchip_vpu_ctx *ctx)
 		    && dpb[i].buf_index < ctx->vq_dst.num_buffers)
 			buf = ctx->dst_bufs[dpb[i].buf_index];
 		else
-			buf = &ctx->run.dst->vb.vb2_buf;
+			buf = &ctx->run.dst->b.vb2_buf;
 
 		vdpu_write_relaxed(vpu, vb2_dma_contig_plane_dma_addr(buf, 0),
 					VDPU_REG_ADDR_REF(i));
@@ -503,11 +555,11 @@ static void rk3288_vpu_h264d_set_buffers(struct rockchip_vpu_ctx *ctx)
 	dma_addr_t src_dma, dst_dma;
 
 	/* Source (stream) buffer. */
-	src_dma = vb2_dma_contig_plane_dma_addr(&ctx->run.src->vb.vb2_buf, 0);
+	src_dma = vb2_dma_contig_plane_dma_addr(&ctx->run.src->b.vb2_buf, 0);
 	vdpu_write_relaxed(vpu, src_dma, VDPU_REG_ADDR_STR);
 
 	/* Destination (decoded frame) buffer. */
-	dst_dma = vb2_dma_contig_plane_dma_addr(&ctx->run.dst->vb.vb2_buf, 0);
+	dst_dma = vb2_dma_contig_plane_dma_addr(&ctx->run.dst->b.vb2_buf, 0);
 	vdpu_write_relaxed(vpu, dst_dma, VDPU_REG_ADDR_DST);
 
 	/* Higher profiles require DMV buffer appended to reference frames. */

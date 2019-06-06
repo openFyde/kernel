@@ -17,24 +17,55 @@
 #ifndef ROCKCHIP_VPU_HW_H_
 #define ROCKCHIP_VPU_HW_H_
 
+#include <linux/interrupt.h>
+#include <linux/v4l2-controls.h>
 #include <media/videobuf2-core.h>
 
 #define ROCKCHIP_HEADER_SIZE		1280
 #define ROCKCHIP_HW_PARAMS_SIZE		5487
 #define ROCKCHIP_RET_PARAMS_SIZE	488
+#define ROCKCHIP_JPEG_QUANT_ELE_SIZE	64
+
+#define ROCKCHIP_VPU_CABAC_TABLE_SIZE	(52 * 2 * 464)
 
 struct rockchip_vpu_dev;
 struct rockchip_vpu_ctx;
 struct rockchip_vpu_buf;
+struct rockchip_vpu_variant;
+
+struct rk3288_vpu_h264d_priv_tbl;
 
 /**
- * enum rockchip_vpu_enc_fmt - source format ID for hardware registers.
+ * struct rockchip_vpu_codec_ops - codec mode specific operations
+ *
+ * @init:	Prepare for streaming. Called from VB2 .start_streaming()
+ *		when streaming from both queues is being enabled.
+ * @exit:	Clean-up after streaming. Called from VB2 .stop_streaming()
+ *		when streaming from first of both enabled queues is being
+ *		disabled.
+ * @run:	Start single {en,de)coding run. Called from non-atomic context
+ *		to indicate that a pair of buffers is ready and the hardware
+ *		should be programmed and started.
+ * @done:	Read back processing results and additional data from hardware.
+ * @reset:	Reset the hardware in case of a timeout.
  */
-enum rockchip_vpu_enc_fmt {
-	ROCKCHIP_VPU_ENC_FMT_YUV420P = 0,
-	ROCKCHIP_VPU_ENC_FMT_YUV420SP = 1,
-	ROCKCHIP_VPU_ENC_FMT_YUYV422 = 2,
-	ROCKCHIP_VPU_ENC_FMT_UYVY422 = 3,
+struct rockchip_vpu_codec_ops {
+	int (*init)(struct rockchip_vpu_ctx *);
+	void (*exit)(struct rockchip_vpu_ctx *);
+
+	void (*run)(struct rockchip_vpu_ctx *);
+	void (*done)(struct rockchip_vpu_ctx *, enum vb2_buffer_state);
+	void (*reset)(struct rockchip_vpu_ctx *);
+};
+
+/**
+ * enum rk3288_vpu_enc_fmt - source format ID for hardware registers.
+ */
+enum rk3288_vpu_enc_fmt {
+	RK3288_VPU_ENC_FMT_YUV420P = 0,
+	RK3288_VPU_ENC_FMT_YUV420SP = 1,
+	RK3288_VPU_ENC_FMT_YUYV422 = 2,
+	RK3288_VPU_ENC_FMT_UYVY422 = 3,
 };
 
 /**
@@ -118,6 +149,39 @@ struct rk3288_h264e_reg_params {
 };
 
 /**
+ * struct rk3399_vp8e_reg_params - low level encoding parameters
+ * TODO: Create abstract structures for more generic controls or just
+ *       remove unused fields.
+ */
+struct rk3399_vp8e_reg_params {
+	u32 is_intra;
+	u32 frm_hdr_size;
+
+	u32 qp;
+
+	s32 mv_prob[2][19];
+	s32 intra_prob;
+
+	u32 bool_enc_value;
+	u32 bool_enc_value_bits;
+	u32 bool_enc_range;
+
+	u32 filterDisable;
+	u32 filter_sharpness;
+	u32 filter_level;
+
+	s32 intra_frm_delta;
+	s32 last_frm_delta;
+	s32 golden_frm_delta;
+	s32 altref_frm_delta;
+
+	s32 bpred_mode_delta;
+	s32 zero_mode_delta;
+	s32 newmv_mode_delta;
+	s32 splitmv_mode_delta;
+};
+
+/**
  * struct rockchip_reg_params - low level encoding parameters
  */
 struct rockchip_reg_params {
@@ -125,6 +189,7 @@ struct rockchip_reg_params {
 	union {
 		const struct rk3288_h264e_reg_params rk3288_h264e;
 		const struct rk3288_vp8e_reg_params rk3288_vp8e;
+		const struct rk3399_vp8e_reg_params rk3399_vp8e;
 	};
 };
 
@@ -148,7 +213,8 @@ struct rockchip_vpu_aux_buf {
 };
 
 /**
- * struct rockchip_vpu_vp8e_hw_ctx - Context private data specific to codec mode.
+ * struct rockchip_vpu_vp8e_hw_ctx - Context private data specific to codec
+ * mode.
  * @ctrl_buf:		VP8 control buffer.
  * @ext_buf:		VP8 ext data buffer.
  * @mv_buf:		VP8 motion vector buffer.
@@ -172,15 +238,67 @@ struct rockchip_vpu_vp8d_hw_ctx {
 };
 
 /**
- * struct rockchip_vpu_h264d_hw_ctx - Per context data specific to H264 decoding.
+ * struct rockchip_vpu_h264d_hw_ctx - Per context data specific to H264
+ * decoding.
  * @priv_tbl:		Private auxiliary buffer for hardware.
  */
 struct rockchip_vpu_h264d_hw_ctx {
 	struct rockchip_vpu_aux_buf priv_tbl;
 };
 
+struct rockchip_vpu_vp9d_last_info {
+	bool abs_delta;
+	s8 ref_deltas[4];
+	s8 mode_deltas[2];
+	bool segmentation_enable;
+	bool show_frame;
+	bool intra_only;
+	u32 width;
+	u32 height;
+	u8 frame_type;
+	s16 feature_data[8][4];
+	u8 feature_mask[8];
+	dma_addr_t mv_base_addr;
+	bool last_segid_flag;
+};
+
+struct rockchip_vpu_vp9d_counts {
+	u32 partition[4][4][4];
+	u32 skip[3][2];
+	u32 intra[4][2];
+	u32 tx32p[2][4];
+	u32 tx16p[2][4]; /* orign tx16p */
+	u32 tx8p[2][2];
+	u32 y_mode[4][10];
+	u32 uv_mode[10][10];
+	u32 comp[5][2];
+	u32 comp_ref[5][2];
+	u32 single_ref[5][2][2];
+	u32 mv_mode[7][4];
+	u32 filter[4][3];
+	u32 mv_joint[4];
+	u32 sign[2][2];
+	u32 classes[2][12]; /* orign classes[12] */
+	u32 class0[2][2];
+	u32 bits[2][10][2];
+	u32 class0_fp[2][2][4];
+	u32 fp[2][4];
+	u32 class0_hp[2][2];
+	u32 hp[2][2];
+	u32 coef[4][2][2][6][6][3];
+	u32 eob[4][2][2][6][6][2];
+};
+
+struct rockchip_vpu_vp9d_hw_ctx {
+	struct rockchip_vpu_aux_buf priv_tbl;
+	struct rockchip_vpu_aux_buf priv_dst;
+	struct rockchip_vpu_vp9d_last_info last_info;
+	dma_addr_t mv_base_addr;
+};
+
 /**
- * struct rockchip_vpu_h264e_hw_ctx - Context private data specific to codec mode.
+ * struct rockchip_vpu_h264e_hw_ctx - Context private data specific to
+ * codec mode.
  * @ctrl_buf:		H264 control buffer.
  * @ext_buf:		H264 ext data buffer.
  * @ref_rec_ptr:	Bit flag for swapping ref and rec buffers every frame.
@@ -204,13 +322,16 @@ struct rockchip_vpu_hw_ctx {
 		struct rockchip_vpu_vp8d_hw_ctx vp8d;
 		struct rockchip_vpu_h264e_hw_ctx h264e;
 		struct rockchip_vpu_h264d_hw_ctx h264d;
+		struct rockchip_vpu_vp9d_hw_ctx vp9d;
 		/* Other modes will need different data. */
 	};
 };
 
-int rockchip_vpu_hw_probe(struct rockchip_vpu_dev *vpu);
-void rockchip_vpu_hw_remove(struct rockchip_vpu_dev *vpu);
+extern const struct rockchip_vpu_variant rk3288_vpu_variant;
+extern const struct rockchip_vpu_variant rk3399_vpu_variant;
+extern const struct rockchip_vpu_variant rk3399_vdec_variant;
 
+void rockchip_vpu_watchdog(struct work_struct *work);
 void rockchip_vpu_power_on(struct rockchip_vpu_dev *vpu);
 
 int rockchip_vpu_init(struct rockchip_vpu_ctx *ctx);
@@ -218,11 +339,7 @@ void rockchip_vpu_deinit(struct rockchip_vpu_ctx *ctx);
 
 void rockchip_vpu_run(struct rockchip_vpu_ctx *ctx);
 
-/* Ops for rk3288 vpu */
-int rk3288_vpu_enc_irq(int irq, struct rockchip_vpu_dev *vpu);
-int rk3288_vpu_dec_irq(int irq, struct rockchip_vpu_dev *vpu);
-void rk3288_vpu_enc_reset(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_dec_reset(struct rockchip_vpu_ctx *ctx);
+void rockchip_vpu_irq_done(struct rockchip_vpu_dev *vpu);
 
 /* Run ops for rk3288 H264 decoder */
 int rk3288_vpu_h264d_init(struct rockchip_vpu_ctx *ctx);
@@ -234,7 +351,7 @@ int rk3288_vpu_h264e_init(struct rockchip_vpu_ctx *ctx);
 void rk3288_vpu_h264e_exit(struct rockchip_vpu_ctx *ctx);
 void rk3288_vpu_h264e_run(struct rockchip_vpu_ctx *ctx);
 void rk3288_vpu_h264e_done(struct rockchip_vpu_ctx *ctx,
-			  enum vb2_buffer_state result);
+			   enum vb2_buffer_state result);
 
 /* Run ops for rk3288 VP8 decoder */
 int rk3288_vpu_vp8d_init(struct rockchip_vpu_ctx *ctx);
@@ -247,12 +364,45 @@ void rk3288_vpu_vp8e_exit(struct rockchip_vpu_ctx *ctx);
 void rk3288_vpu_vp8e_run(struct rockchip_vpu_ctx *ctx);
 void rk3288_vpu_vp8e_done(struct rockchip_vpu_ctx *ctx,
 			  enum vb2_buffer_state result);
+const struct rk3288_vp8e_reg_params *rk3288_vpu_vp8e_get_dummy_params(void);
 
-const struct rockchip_reg_params *rk3288_vpu_vp8e_get_dummy_params(void);
+void rk3288_vpu_vp8e_assemble_bitstream(struct rockchip_vpu_ctx *ctx,
+					struct rockchip_vpu_buf *dst_buf);
 
-void rockchip_vpu_vp8e_assemble_bitstream(struct rockchip_vpu_ctx *ctx,
-					struct rockchip_vpu_buf *dst_buf);
-void rockchip_vpu_h264e_assemble_bitstream(struct rockchip_vpu_ctx *ctx,
-					struct rockchip_vpu_buf *dst_buf);
+/* Run ops for rk3399 vpu H264 encoder */
+int rk3399_vpu_h264e_init(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_h264e_exit(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_h264e_run(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_h264e_done(struct rockchip_vpu_ctx *ctx,
+			   enum vb2_buffer_state result);
+
+/* Run ops for rk3399 vpu VP8 decoder */
+int rk3399_vpu_vp8d_init(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_vp8d_exit(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_vp8d_run(struct rockchip_vpu_ctx *ctx);
+
+/* Run ops for rk3399 vpu VP8 encoder */
+int rk3399_vpu_vp8e_init(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_vp8e_exit(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_vp8e_run(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_vp8e_done(struct rockchip_vpu_ctx *ctx,
+			  enum vb2_buffer_state result);
+
+/* Run ops for rk3399 vdec H264 decoder */
+int rk3399_vdec_h264d_init(struct rockchip_vpu_ctx *ctx);
+void rk3399_vdec_h264d_exit(struct rockchip_vpu_ctx *ctx);
+void rk3399_vdec_h264d_run(struct rockchip_vpu_ctx *ctx);
+
+/* Run ops for rk3399 vdec VP9 decoder */
+int rk3399_vdec_vp9d_init(struct rockchip_vpu_ctx *ctx);
+void rk3399_vdec_vp9d_exit(struct rockchip_vpu_ctx *ctx);
+void rk3399_vdec_vp9d_run(struct rockchip_vpu_ctx *ctx);
+void rk3399_vdec_vp9d_done(struct rockchip_vpu_ctx *ctx,
+			   enum vb2_buffer_state result);
+
+/* Run ops for rk3399 vdec JPEG encoder */
+void rk3399_vpu_jpege_run(struct rockchip_vpu_ctx *ctx);
+void rk3399_vpu_jpege_done(struct rockchip_vpu_ctx *ctx,
+			  enum vb2_buffer_state result);
 
 #endif /* ROCKCHIP_VPU_HW_H_ */

@@ -22,6 +22,8 @@
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
+#include <linux/pm_runtime.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/videodev2.h>
@@ -35,8 +37,8 @@
 #include "rockchip_vpu_enc.h"
 #include "rockchip_vpu_hw.h"
 
-int debug;
-module_param(debug, int, S_IRUGO | S_IWUSR);
+int rockchip_vpu_debug;
+module_param_named(debug, rockchip_vpu_debug, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug,
 		 "Debug level - higher value produces more verbose messages");
 
@@ -86,20 +88,53 @@ static void __rockchip_vpu_dequeue_run_locked(struct rockchip_vpu_ctx *ctx)
 	src = list_first_entry(&ctx->src_queue, struct rockchip_vpu_buf, list);
 	dst = list_first_entry(&ctx->dst_queue, struct rockchip_vpu_buf, list);
 
-	list_del(&src->list);
-	list_del(&dst->list);
+	list_del_init(&src->list);
+	list_del_init(&dst->list);
 
 	ctx->run.src = src;
 	ctx->run.dst = dst;
+}
+
+static bool rockchip_vpu_ctx_is_flush(struct rockchip_vpu_ctx *ctx)
+{
+	return ctx->run.src == &ctx->flush_buf;
+}
+
+static void rockchip_vpu_flush_done(struct rockchip_vpu_ctx *ctx)
+{
+	struct vb2_v4l2_buffer *vb2_dst = &ctx->run.dst->b;
+	static const struct v4l2_event event = {
+		.type = V4L2_EVENT_EOS,
+	};
+	int i;
+
+	vb2_dst->flags |= V4L2_BUF_FLAG_LAST;
+	for (i = 0; i < vb2_dst->vb2_buf.num_planes; i++)
+		vb2_set_plane_payload(&vb2_dst->vb2_buf, i, 0);
+	vb2_buffer_done(&vb2_dst->vb2_buf, VB2_BUF_STATE_DONE);
+
+	v4l2_event_queue_fh(&ctx->fh, &event);
 }
 
 static struct rockchip_vpu_ctx *
 rockchip_vpu_encode_after_decode_war(struct rockchip_vpu_ctx *ctx)
 {
 	struct rockchip_vpu_dev *dev = ctx->dev;
+	struct rockchip_vpu_buf *src;
 
-	if (dev->dummy_encode_ctx &&
-			dev->was_decoding && rockchip_vpu_ctx_is_encoder(ctx))
+	/*
+	 * Flush buffer is a no-op, so no need for the workaround.
+	 * Since ctx was dequeued from ready_ctxs list, we know that it has
+	 * at least one buffer in each queue.
+	 */
+	src = list_first_entry(&ctx->src_queue, struct rockchip_vpu_buf, list);
+	if (src == &ctx->flush_buf)
+		return ctx;
+
+	if (!dev->dummy_encode_ctx)
+		return ctx;
+
+	if (dev->was_decoding && rockchip_vpu_ctx_is_encoder(ctx))
 		return dev->dummy_encode_ctx;
 
 	return ctx;
@@ -143,15 +178,31 @@ static void rockchip_vpu_try_run(struct rockchip_vpu_dev *dev)
 		__rockchip_vpu_dequeue_run_locked(ctx);
 	}
 
+	vpu_debug(1, "setting ctx: %p\n", ctx);
+
 	dev->current_ctx = ctx;
-	dev->was_decoding = !rockchip_vpu_ctx_is_encoder(ctx);
+
+	if (rockchip_vpu_ctx_is_flush(ctx)) {
+		vpu_debug(1, "ctx->stopped = true\n");
+		ctx->stopped = true;
+	} else {
+		dev->was_decoding = !rockchip_vpu_ctx_is_encoder(ctx);
+		vpu_debug(1, "dev->was_decoding = %d\n", dev->was_decoding);
+	}
 
 out:
 	spin_unlock_irqrestore(&dev->irqlock, flags);
 
 	if (ctx) {
-		rockchip_vpu_prepare_run(ctx);
-		rockchip_vpu_run(ctx);
+		if (rockchip_vpu_ctx_is_flush(ctx)) {
+			vpu_debug(1, "rockchip_vpu_ctx_is_flush\n");
+			/* Flush is an entirely software operation. */
+			rockchip_vpu_run_done(ctx, VB2_BUF_STATE_DONE);
+		} else {
+			vpu_debug(1, "to => rockchip_vpu_prepare_run\n");
+			rockchip_vpu_prepare_run(ctx);
+			rockchip_vpu_run(ctx);
+		}
 	}
 
 	vpu_debug_leave();
@@ -162,6 +213,10 @@ static void __rockchip_vpu_try_context_locked(struct rockchip_vpu_dev *dev,
 {
 	if (!list_empty(&ctx->list))
 		/* Context already queued. */
+		return;
+
+	if (ctx->stopped)
+		/* No processing until we are started again. */
 		return;
 
 	if (!list_empty(&ctx->dst_queue) && !list_empty(&ctx->src_queue))
@@ -176,20 +231,24 @@ void rockchip_vpu_run_done(struct rockchip_vpu_ctx *ctx,
 
 	vpu_debug_enter();
 
-	if (ctx->run_ops->run_done)
-		ctx->run_ops->run_done(ctx, result);
+	if (rockchip_vpu_ctx_is_flush(ctx)) {
+		rockchip_vpu_flush_done(ctx);
+	} else {
+		if (ctx->run_ops->run_done)
+			ctx->run_ops->run_done(ctx, result);
 
-	if (!rockchip_vpu_ctx_is_dummy_encode(ctx)) {
-		struct vb2_v4l2_buffer *src =
-			to_vb2_v4l2_buffer(&ctx->run.src->vb.vb2_buf);
-		struct vb2_v4l2_buffer *dst =
-			to_vb2_v4l2_buffer(&ctx->run.dst->vb.vb2_buf);
+		if (!rockchip_vpu_ctx_is_dummy_encode(ctx)) {
+			struct vb2_v4l2_buffer *vb2_src = &ctx->run.src->b;
+			struct vb2_v4l2_buffer *vb2_dst = &ctx->run.dst->b;
 
-		dst->timestamp = src->timestamp;
-		vb2_buffer_done(&ctx->run.src->vb.vb2_buf, result);
-		vb2_buffer_done(&ctx->run.dst->vb.vb2_buf, result);
+			vb2_dst->timestamp = vb2_src->timestamp;
+			vb2_buffer_done(&vb2_src->vb2_buf, result);
+			vb2_buffer_done(&vb2_dst->vb2_buf, result);
+		}
 	}
 
+	vpu_debug(1, "setting ctx to NULL\n");
+	vpu_debug(1, "expected:%p where:%p\n", dev->current_ctx, ctx);
 	dev->current_ctx = NULL;
 	wake_up_all(&dev->run_wq);
 
@@ -221,94 +280,37 @@ void rockchip_vpu_try_context(struct rockchip_vpu_dev *dev,
 
 	rockchip_vpu_try_run(dev);
 
-	vpu_debug_enter();
+	vpu_debug_leave();
 }
 
-/*
- * bit stream assembler
- */
-
-static int stream_buffer_status(struct stream_s *stream)
+void write_header(u32 value, u32 *buffer, u32 offset, u32 len)
 {
-	if (stream->byte_cnt + 5 > stream->size) {
-		stream->overflow = 1;
-		return -1;
+	u32 word = offset / 32;
+	u32 bit = offset % 32;
+
+	if (len + bit > 32) {
+		u32 len1 = 32 - bit;
+		u32 len2 = len + bit - 32;
+
+		buffer[word] &= ~(((1 << len1) - 1) << bit);
+		buffer[word] |= value << bit;
+
+		value >>= (32 - bit);
+		buffer[word + 1] &= ~((1 << len2) - 1);
+		buffer[word + 1] |= value;
+	} else {
+		buffer[word] &= ~(((1 << len) - 1) << bit);
+		buffer[word] |= value << bit;
 	}
-
-	return 0;
-}
-
-void stream_put_bits(struct stream_s *buffer, s32 value, s32 number,
-		     const char *name)
-{
-	s32 bits;
-	u32 byte_buffer = buffer->byte_buffer;
-	u8 *stream = buffer->stream;
-
-	if (stream_buffer_status(buffer) != 0)
-		return;
-
-	vpu_debug(0, "assemble %s value %x, bits %d\n", name, value, number);
-
-	BUG_ON(value >= (1 << number));
-	BUG_ON(number >= 25);
-
-	bits = number + buffer->buffered_bits;
-	value <<= (32 - bits);
-	byte_buffer = byte_buffer | value;
-
-	while (bits > 7) {
-		*stream = (u8)(byte_buffer >> 24);
-
-		bits -= 8;
-		byte_buffer <<= 8;
-		stream++;
-		buffer->byte_cnt++;
-	}
-
-	buffer->byte_buffer = byte_buffer;
-	buffer->buffered_bits = (u8)bits;
-	buffer->stream = stream;
-
-	return;
-}
-
-void stream_buffer_reset(struct stream_s *buffer)
-{
-	buffer->stream = buffer->buffer;
-	buffer->byte_cnt = 0;
-	buffer->overflow = 0;
-	buffer->byte_buffer = 0;
-	buffer->buffered_bits = 0;
-}
-
-int stream_buffer_init(struct stream_s *buffer, u8 *stream, s32 size)
-{
-	if (stream == NULL) {
-		buffer->stream = kzalloc(size, GFP_KERNEL);
-	}
-
-	if (buffer->stream == NULL) {
-		vpu_err("allocate stream buffer failed\n");
-		return -1;
-	}
-
-	buffer->buffer = buffer->stream;
-	buffer->size = size;
-
-	stream_buffer_reset(buffer);
-
-	if (stream_buffer_status(buffer) != 0)
-		return -1;
-
-	return 0;
 }
 
 /*
  * Control registration.
  */
 
-#define IS_VPU_PRIV(x) ((V4L2_CTRL_ID2WHICH(x) == V4L2_CTRL_CLASS_MPEG) && \
+#define IS_VPU_PRIV(x) ((V4L2_CTRL_ID2CLASS(x) == V4L2_CTRL_CLASS_MPEG) && \
+			  V4L2_CTRL_DRIVER_PRIV(x))
+#define IS_USER_PRIV(x) ((V4L2_CTRL_ID2CLASS(x) == V4L2_CTRL_CLASS_USER) && \
 			  V4L2_CTRL_DRIVER_PRIV(x))
 
 int rockchip_vpu_ctrls_setup(struct rockchip_vpu_ctx *ctx,
@@ -333,8 +335,8 @@ int rockchip_vpu_ctrls_setup(struct rockchip_vpu_ctx *ctx,
 
 	for (i = 0; i < num_ctrls; i++) {
 		if (IS_VPU_PRIV(controls[i].id)
-		    || controls[i].id >= V4L2_CID_CUSTOM_BASE
-		    || controls[i].type == V4L2_CTRL_TYPE_PRIVATE) {
+		    || IS_USER_PRIV(controls[i].id)
+		    || controls[i].type >= V4L2_CTRL_COMPOUND_TYPES) {
 			memset(&cfg, 0, sizeof(struct v4l2_ctrl_config));
 
 			cfg.ops = ctrl_ops;
@@ -365,7 +367,7 @@ int rockchip_vpu_ctrls_setup(struct rockchip_vpu_ctx *ctx,
 					 ctrl_ops,
 					 controls[i].id,
 					 controls[i].maximum,
-					 0,
+					 controls[i].menu_skip_mask,
 					 controls[i].
 					 default_value);
 			} else {
@@ -445,6 +447,7 @@ static int rockchip_vpu_open(struct file *filp)
 	INIT_LIST_HEAD(&ctx->src_queue);
 	INIT_LIST_HEAD(&ctx->dst_queue);
 	INIT_LIST_HEAD(&ctx->list);
+	INIT_LIST_HEAD(&ctx->flush_buf.list);
 
 	if (vdev == dev->vfd_enc) {
 		/* only for encoder */
@@ -475,9 +478,9 @@ static int rockchip_vpu_open(struct file *filp)
 	q->buf_struct_size = sizeof(struct rockchip_vpu_buf);
 
 	if (vdev == dev->vfd_enc) {
-		q->ops = get_enc_queue_ops();
+		q->ops = rockchip_get_enc_queue_ops();
 	} else if (vdev == dev->vfd_dec) {
-		q->ops = get_dec_queue_ops();
+		q->ops = rockchip_get_dec_queue_ops();
 		q->use_dma_bidirectional = 1;
 	}
 
@@ -499,9 +502,9 @@ static int rockchip_vpu_open(struct file *filp)
 	q->buf_struct_size = sizeof(struct rockchip_vpu_buf);
 
 	if (vdev == dev->vfd_enc)
-		q->ops = get_enc_queue_ops();
+		q->ops = rockchip_get_enc_queue_ops();
 	else if (vdev == dev->vfd_dec)
-		q->ops = get_dec_queue_ops();
+		q->ops = rockchip_get_dec_queue_ops();
 
 	q->mem_ops = &vb2_dma_contig_memops;
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
@@ -668,14 +671,78 @@ static const struct v4l2_file_operations rockchip_vpu_fops = {
  * Platform driver.
  */
 
-static void* rockchip_get_drv_data(struct platform_device *pdev);
+/* Supported VPU variants. */
+static const struct of_device_id of_rockchip_vpu_match[] = {
+	{ .compatible = "rockchip,rk3288-vpu", .data = &rk3288_vpu_variant, },
+	{ .compatible = "rockchip,rk3399-vpu", .data = &rk3399_vpu_variant, },
+	{ .compatible = "rockchip,rk3399-vdec", .data = &rk3399_vdec_variant, },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, of_rockchip_vpu_match);
+
+static int rockchip_vpu_video_device_register(struct rockchip_vpu_dev *vpu,
+					      bool encoder)
+{
+	const struct of_device_id *match;
+	struct video_device *vfd;
+	int ret = 0;
+
+	vpu_debug_enter();
+
+	match = of_match_node(of_rockchip_vpu_match, vpu->dev->of_node);
+
+	vfd = video_device_alloc();
+	if (!vfd) {
+		v4l2_err(&vpu->v4l2_dev, "Failed to allocate video device\n");
+		return -ENOMEM;
+	}
+
+	vfd->fops = &rockchip_vpu_fops;
+	vfd->release = video_device_release;
+	vfd->lock = &vpu->vpu_mutex;
+	vfd->v4l2_dev = &vpu->v4l2_dev;
+	vfd->vfl_dir = VFL_DIR_M2M;
+
+	if (encoder) {
+		vfd->ioctl_ops = rockchip_get_enc_v4l2_ioctl_ops();
+		snprintf(vfd->name, sizeof(vfd->name), "%s-enc",
+			 match->compatible);
+		vpu->vfd_enc = vfd;
+	} else {
+		vfd->ioctl_ops = rockchip_get_dec_v4l2_ioctl_ops();
+		snprintf(vfd->name, sizeof(vfd->name), "%s-dec",
+			 match->compatible);
+		vpu->vfd_dec = vfd;
+	}
+
+	video_set_drvdata(vfd, vpu);
+
+	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
+	if (ret) {
+		v4l2_err(&vpu->v4l2_dev, "Failed to register video device\n");
+		goto err_dev_reg;
+	}
+
+	v4l2_info(&vpu->v4l2_dev, "%s registered as video%d\n",
+		  vfd->name, vfd->num);
+
+	vpu_debug_leave();
+
+	return 0;
+
+err_dev_reg:
+	video_device_release(vfd);
+	vpu_debug_leave();
+
+	return ret;
+}
 
 static int rockchip_vpu_probe(struct platform_device *pdev)
 {
+	const struct of_device_id *match;
 	struct rockchip_vpu_dev *vpu = NULL;
 	DEFINE_DMA_ATTRS(attrs_novm);
 	DEFINE_DMA_ATTRS(attrs_nohugepage);
-	struct video_device *vfd;
 	int ret = 0;
 
 	vpu_debug_enter();
@@ -691,13 +758,22 @@ static int rockchip_vpu_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&vpu->ready_ctxs);
 	init_waitqueue_head(&vpu->run_wq);
 
-	vpu->variant = rockchip_get_drv_data(pdev);
+	match = of_match_node(of_rockchip_vpu_match, pdev->dev.of_node);
+	vpu->variant = match->data;
 
-	ret = rockchip_vpu_hw_probe(vpu);
+	INIT_DELAYED_WORK(&vpu->watchdog_work, rockchip_vpu_watchdog);
+
+	ret = vpu->variant->hw_probe(vpu);
 	if (ret) {
-		dev_err(&pdev->dev, "rockchip_vpu_hw_probe failed\n");
+		dev_err(&pdev->dev, "Failed to probe VPU hardware\n");
 		goto err_hw_probe;
 	}
+
+	vpu->variant->clk_enable(vpu);
+
+	pm_runtime_set_autosuspend_delay(vpu->dev, 100);
+	pm_runtime_use_autosuspend(vpu->dev);
+	pm_runtime_enable(vpu->dev);
 
 	/*
 	 * We'll do mostly sequential access, so sacrifice TLB efficiency for
@@ -729,8 +805,25 @@ static int rockchip_vpu_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, vpu);
 
-	/* workaround for rk3288 codecs */
-	if (vpu->variant->codecs == RK3288_CODECS) {
+	if (vpu->variant->dec_fmts) {
+		ret = rockchip_vpu_video_device_register(vpu, false);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"Failed to register decoder\n");
+			goto err_dec_reg;
+		}
+	}
+
+	if (vpu->variant->enc_fmts) {
+		ret = rockchip_vpu_video_device_register(vpu, true);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"Failed to register encoder\n");
+			goto err_enc_reg;
+		}
+	}
+
+	if (vpu->variant->needs_enc_after_dec_war) {
 		ret = rockchip_vpu_enc_init_dummy_ctx(vpu);
 		if (ret) {
 			dev_err(&pdev->dev,
@@ -739,94 +832,29 @@ static int rockchip_vpu_probe(struct platform_device *pdev)
 		}
 	}
 
-	/* encoder */
-	if (!(vpu->variant->codecs & ROCKCHIP_VPU_ENCODERS))
-		goto no_encoder;
-
-	vfd = video_device_alloc();
-	if (!vfd) {
-		v4l2_err(&vpu->v4l2_dev, "Failed to allocate video device\n");
-		ret = -ENOMEM;
-		goto err_enc_alloc;
-	}
-
-	vfd->fops = &rockchip_vpu_fops;
-	vfd->ioctl_ops = get_enc_v4l2_ioctl_ops();
-	vfd->release = video_device_release;
-	vfd->lock = &vpu->vpu_mutex;
-	vfd->v4l2_dev = &vpu->v4l2_dev;
-	vfd->vfl_dir = VFL_DIR_M2M;
-	snprintf(vfd->name, sizeof(vfd->name), "%s", ROCKCHIP_VPU_ENC_NAME);
-	vpu->vfd_enc = vfd;
-
-	video_set_drvdata(vfd, vpu);
-
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
-	if (ret) {
-		v4l2_err(&vpu->v4l2_dev, "Failed to register video device\n");
-		video_device_release(vfd);
-		goto err_enc_reg;
-	}
-
-	v4l2_info(&vpu->v4l2_dev,
-		"Rockchip VPU encoder registered as /vpu/video%d\n",
-		vfd->num);
-
-no_encoder:
-	/* decoder */
-	if (!(vpu->variant->codecs & ROCKCHIP_VPU_DECODERS))
-		goto no_decoder;
-
-	vfd = video_device_alloc();
-	if (!vfd) {
-		v4l2_err(&vpu->v4l2_dev, "Failed to allocate video device\n");
-		ret = -ENOMEM;
-		goto err_dec_alloc;
-	}
-
-	vfd->fops = &rockchip_vpu_fops;
-	vfd->ioctl_ops = get_dec_v4l2_ioctl_ops();
-	vfd->release = video_device_release;
-	vfd->lock = &vpu->vpu_mutex;
-	vfd->v4l2_dev = &vpu->v4l2_dev;
-	vfd->vfl_dir = VFL_DIR_M2M;
-	snprintf(vfd->name, sizeof(vfd->name), "%s", ROCKCHIP_VPU_DEC_NAME);
-	vpu->vfd_dec = vfd;
-
-	video_set_drvdata(vfd, vpu);
-
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
-	if (ret) {
-		v4l2_err(&vpu->v4l2_dev, "Failed to register video device\n");
-		video_device_release(vfd);
-		goto err_dec_reg;
-	}
-
-	v4l2_info(&vpu->v4l2_dev,
-		"Rockchip VPU decoder registered as /vpu/video%d\n",
-		vfd->num);
-
-no_decoder:
 	vpu_debug_leave();
 
 	return 0;
 
-err_dec_reg:
-	video_device_release(vpu->vfd_dec);
-err_dec_alloc:
-	video_unregister_device(vpu->vfd_enc);
-err_enc_reg:
-	video_device_release(vpu->vfd_enc);
-err_enc_alloc:
-	rockchip_vpu_enc_free_dummy_ctx(vpu);
 err_dummy_enc:
+	if (vpu->vfd_enc) {
+		video_unregister_device(vpu->vfd_enc);
+		video_device_release(vpu->vfd_enc);
+	}
+err_enc_reg:
+	if (vpu->vfd_dec) {
+		video_unregister_device(vpu->vfd_dec);
+		video_device_release(vpu->vfd_dec);
+	}
+err_dec_reg:
 	v4l2_device_unregister(&vpu->v4l2_dev);
 err_v4l2_dev_reg:
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx_vm);
 err_dma_contig_vm:
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx);
 err_dma_contig:
-	rockchip_vpu_hw_remove(vpu);
+	pm_runtime_disable(vpu->dev);
+	vpu->variant->clk_disable(vpu);
 err_hw_probe:
 	pr_debug("%s-- with error\n", __func__);
 	vpu_debug_leave();
@@ -848,60 +876,25 @@ static int rockchip_vpu_remove(struct platform_device *pdev)
 	 * contexts have been released.
 	 */
 
-	video_unregister_device(vpu->vfd_dec);
-	video_unregister_device(vpu->vfd_enc);
-	rockchip_vpu_enc_free_dummy_ctx(vpu);
+	if (vpu->vfd_enc) {
+		video_unregister_device(vpu->vfd_enc);
+		video_device_release(vpu->vfd_enc);
+	}
+	if (vpu->vfd_dec) {
+		video_unregister_device(vpu->vfd_dec);
+		video_device_release(vpu->vfd_dec);
+	}
+	if (vpu->variant->needs_enc_after_dec_war)
+		rockchip_vpu_enc_free_dummy_ctx(vpu);
 	v4l2_device_unregister(&vpu->v4l2_dev);
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx_vm);
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx);
-	rockchip_vpu_hw_remove(vpu);
+	pm_runtime_disable(vpu->dev);
+	vpu->variant->clk_disable(vpu);
 
 	vpu_debug_leave();
 
 	return 0;
-}
-
-/* Supported VPU variants. */
-static const struct rockchip_vpu_variant rk3288_vpu_variant = {
-	.name = "Rk3288 vpu",
-	.codecs = RK3288_CODECS,
-	.enc_offset = 0x0,
-	.enc_reg_num = 164,
-	.dec_offset = 0x400,
-	.dec_reg_num = 60 + 41,
-};
-
-static struct platform_device_id vpu_driver_ids[] = {
-	{
-		.name = "rk3288-vpu",
-		.driver_data = (unsigned long)&rk3288_vpu_variant,
-	},
-	{ /* sentinel */ }
-};
-
-MODULE_DEVICE_TABLE(platform, vpu_driver_ids);
-
-#ifdef CONFIG_OF
-static const struct of_device_id of_rockchip_vpu_match[] = {
-	{ .compatible = "rockchip,rk3288-vpu", .data = &rk3288_vpu_variant, },
-	{ /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(of, of_rockchip_vpu_match);
-#endif
-
-static void* rockchip_get_drv_data(struct platform_device *pdev)
-{
-#ifdef CONFIG_OF
-	if (pdev->dev.of_node) {
-		const struct of_device_id *match;
-		match = of_match_node(of_rockchip_vpu_match,
-							  pdev->dev.of_node);
-		if (match)
-			return (void *)match->data;
-	}
-#endif
-
-	return (void *)platform_get_device_id(pdev)->driver_data;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -933,13 +926,10 @@ static const struct dev_pm_ops rockchip_vpu_pm_ops = {
 static struct platform_driver rockchip_vpu_driver = {
 	.probe = rockchip_vpu_probe,
 	.remove = rockchip_vpu_remove,
-	.id_table = vpu_driver_ids,
 	.driver = {
-		   .name = ROCKCHIP_VPU_NAME,
+		   .name = "rockchip-vpu",
 		   .owner = THIS_MODULE,
-#ifdef CONFIG_OF
 		   .of_match_table = of_match_ptr(of_rockchip_vpu_match),
-#endif
 		   .pm = &rockchip_vpu_pm_ops,
 	},
 };
