@@ -211,6 +211,7 @@ struct rockchip_vpu_dev {
 	void __iomem *base;
 	void __iomem *enc_base;
 	void __iomem *dec_base;
+	struct iommu_domain *domain;
 
 	struct mutex vpu_mutex;	/* video_device lock */
 	spinlock_t irqlock;

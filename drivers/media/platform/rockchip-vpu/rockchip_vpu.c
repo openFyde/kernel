@@ -30,6 +30,7 @@
 #include <media/v4l2-event.h>
 #include <linux/workqueue.h>
 #include <linux/of.h>
+#include <linux/dma-iommu.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
 
@@ -737,6 +738,90 @@ err_dev_reg:
 	return ret;
 }
 
+static int rockchip_vpu_iommu_init(struct rockchip_vpu_dev *vpu)
+{
+	struct iommu_group *group;
+	int ret;
+
+	vpu->domain = iommu_domain_alloc(&platform_bus_type);
+	if (!vpu->domain) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	ret = iommu_get_dma_cookie(vpu->domain);
+	if (ret)
+		goto err;
+
+	group = iommu_group_get(vpu->dev);
+	if (!group) {
+		group = iommu_group_alloc();
+		if (IS_ERR(group))
+			goto err;
+		ret = iommu_group_add_device(group, vpu->dev);
+		iommu_group_put(group);
+		if (ret)
+			goto err;
+	}
+
+	return 0;
+
+err:
+	dev_err(vpu->dev, "Failed to setup IOMMU\n");
+
+	if(vpu->domain) {
+		iommu_domain_free(vpu->domain);
+	}
+
+	return ret;
+}
+
+static int rockchip_vpu_iommu_attach(struct rockchip_vpu_dev *vpu)
+{
+	int ret;
+
+	if (!vpu->domain) {
+		dev_err(vpu->dev, "Missing iommu domain\n");
+		return -ENODEV;
+	}
+
+	ret = dma_set_coherent_mask(vpu->dev, DMA_BIT_MASK(32));
+	if (ret) {
+		dev_err(vpu->dev, "Failed to set coherent mask\n");
+		return ret;
+	}
+
+	dma_set_max_seg_size(vpu->dev, DMA_BIT_MASK(32));
+
+	ret = iommu_attach_device(vpu->domain, vpu->dev);
+	if (ret) {
+		dev_err(vpu->dev, "Failed to attach iommu device\n");
+		return ret;
+	}
+
+	if (!common_iommu_setup_dma_ops(vpu->dev, 0x10000000, SZ_2G, vpu->domain->ops)) {
+		dev_err(vpu->dev, "Failed to set dma_ops\n");
+		iommu_detach_device(vpu->domain, vpu->dev);
+		ret = -ENODEV;
+	}
+
+	return ret;
+}
+
+static void rockchip_vpu_iommu_detach(struct rockchip_vpu_dev *vpu)
+{
+	if (vpu->domain) {
+		iommu_detach_device(vpu->domain, vpu->dev);
+	}
+}
+
+static void rockchip_vpu_iommu_cleanup(struct rockchip_vpu_dev *vpu)
+{
+	if (vpu->domain) {
+		iommu_domain_free(vpu->domain);
+	}
+}
+
 static int rockchip_vpu_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *match;
@@ -770,6 +855,9 @@ static int rockchip_vpu_probe(struct platform_device *pdev)
 	}
 
 	vpu->variant->clk_enable(vpu);
+
+	rockchip_vpu_iommu_init(vpu);
+	rockchip_vpu_iommu_attach(vpu);
 
 	pm_runtime_set_autosuspend_delay(vpu->dev, 100);
 	pm_runtime_use_autosuspend(vpu->dev);
@@ -854,6 +942,8 @@ err_dma_contig_vm:
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx);
 err_dma_contig:
 	pm_runtime_disable(vpu->dev);
+	rockchip_vpu_iommu_detach(vpu);
+	rockchip_vpu_iommu_cleanup(vpu);
 	vpu->variant->clk_disable(vpu);
 err_hw_probe:
 	pr_debug("%s-- with error\n", __func__);
@@ -890,6 +980,8 @@ static int rockchip_vpu_remove(struct platform_device *pdev)
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx_vm);
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx);
 	pm_runtime_disable(vpu->dev);
+	rockchip_vpu_iommu_detach(vpu);
+	rockchip_vpu_iommu_cleanup(vpu);
 	vpu->variant->clk_disable(vpu);
 
 	vpu_debug_leave();
@@ -904,6 +996,7 @@ static int rockchip_vpu_suspend(struct device *dev)
 
 	set_bit(VPU_SUSPENDED, &vpu->state);
 	wait_event(vpu->run_wq, vpu->current_ctx == NULL);
+	rockchip_vpu_iommu_detach(vpu);
 
 	return 0;
 }
@@ -913,6 +1006,7 @@ static int rockchip_vpu_resume(struct device *dev)
 	struct rockchip_vpu_dev *vpu = dev_get_drvdata(dev);
 
 	clear_bit(VPU_SUSPENDED, &vpu->state);
+	rockchip_vpu_iommu_attach(vpu);
 	rockchip_vpu_try_run(vpu);
 
 	return 0;
