@@ -45,3 +45,7 @@ build:
         --description "${DESCRIPTION}"
 
       rm ../*$(./dev-make info)*.deb
+  only:
+    refs:
+      - release-4-4
+
