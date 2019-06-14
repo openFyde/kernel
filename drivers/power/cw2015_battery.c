@@ -660,6 +660,12 @@ static int cw_battery_get_property(struct power_supply *psy,
 		val->intval = cw_bat->charge_count;
 		break;
 
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		val->intval = cw_bat->capacity * 1000 / 100 * cw_bat->plat_data.design_capacity;
+		if (cw_bat->bat_mode == MODE_VIRTUAL)
+			val->intval = VIRTUAL_SOC;
+		break;
+
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 		val->intval = cw_bat->plat_data.design_capacity * 1000;
 		break;
@@ -698,6 +704,7 @@ static enum power_supply_property cw_battery_properties[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_TEMP,
