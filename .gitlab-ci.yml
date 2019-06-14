@@ -14,7 +14,7 @@ before_script:
 
 build:
   stage: build
-  only: [branches]
+  only: [release-4.4]
   script:
     - export RELEASE=$((1000+$CI_PIPELINE_IID))
     - ./dev-make kernel-package
@@ -45,7 +45,3 @@ build:
         --description "${DESCRIPTION}"
 
       rm ../*$(./dev-make info)*.deb
-  only:
-    refs:
-      - release-4-4
-
