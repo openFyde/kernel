@@ -183,7 +183,7 @@ static const struct of_device_id rockchip_cpufreq_of_match[] = {
 		.data = (void *)&px30_get_soc_info,
 	},
 	{
-		.compatible = "rockchip,rk3399",
+		.compatible = "rockchip,rk3399-disabled",
 		.data = (void *)&rk3399_get_soc_info,
 	},
 	{},
