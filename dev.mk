@@ -3,7 +3,7 @@ KERNEL_DEFCONFIG ?= rockchip_linux_defconfig
 
 KERNEL_VERSION ?= $(shell $(KERNEL_MAKE) -s kernelversion)
 KERNEL_RELEASE ?= $(shell $(KERNEL_MAKE) -s kernelrelease)
-KDEB_PKGVERSION ?= $(KERNEL_VERSION)-$(RELEASE)-rockchip-ayufan
+KDEB_PKGVERSION ?= $(KERNEL_VERSION)-$(RELEASE)-rockchip-cros-ayufan
 
 KERNEL_MAKE ?= make \
 	ARCH=arm64 \
@@ -16,7 +16,7 @@ KERNEL_MAKE ?= make \
 .PHONY: .scmversion
 .scmversion:
 ifneq (,$(RELEASE))
-	@echo "-$(RELEASE)-rockchip-ayufan-g$$(git rev-parse --short HEAD)" > .scmversion
+	@echo "-$(RELEASE)-rockchip-cros-ayufan-g$$(git rev-parse --short HEAD)" > .scmversion
 else
 	@echo "-rockchip-dev" > .scmversion
 endif
