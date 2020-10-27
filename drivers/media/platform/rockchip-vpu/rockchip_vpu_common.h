@@ -39,7 +39,7 @@
 
 #define V4L2_CID_CUSTOM_BASE		(V4L2_CID_USER_BASE | 0x1000)
 
-#define DST_QUEUE_OFF_BASE		(TASK_SIZE / 2)
+#define DST_QUEUE_OFF_BASE		(1UL << 30)
 
 #define ROCKCHIP_VPU_MAX_CTRLS		32
 
@@ -58,7 +58,6 @@ struct rockchip_vpu_codec_ops;
  *
  * @enc_offset:			Offset from VPU base to encoder registers.
  * @dec_offset:			Offset from VPU base to decoder registers.
- * @needs_enc_after_dec_war:	Needs dummy encoder.
  * @needs_dpb_map:		Needs dpb reorder mapping.
  * @enc_fmts:			Encoder formats.
  * @num_enc_fmts:		Number of encoder formats.
@@ -72,7 +71,6 @@ struct rockchip_vpu_codec_ops;
 struct rockchip_vpu_variant {
 	unsigned enc_offset;
 	unsigned dec_offset;
-	bool needs_enc_after_dec_war;
 	bool needs_dpb_map;
 	const struct rockchip_vpu_fmt *enc_fmts;
 	unsigned num_enc_fmts;
@@ -190,10 +188,6 @@ enum rockchip_vpu_state {
  * @current_ctx:	Context being currently processed by hardware.
  * @run_wq:		Wait queue to wait for run completion.
  * @watchdog_work:	Delayed work for hardware timeout handling.
- * @dummy_encode_ctx:	Context used to run dummy frame encoding to initialize
- *			encoder hardware state.
- * @dummy_encode_src:	Source buffers used for dummy frame encoding.
- * @dummy_encode_dst:	Desintation buffer used for dummy frame encoding.
  * @was_decoding:	Indicates whether last run context was a decoder.
  */
 struct rockchip_vpu_dev {
@@ -211,7 +205,6 @@ struct rockchip_vpu_dev {
 	void __iomem *base;
 	void __iomem *enc_base;
 	void __iomem *dec_base;
-	struct iommu_domain *domain;
 
 	struct mutex vpu_mutex;	/* video_device lock */
 	spinlock_t irqlock;
@@ -221,9 +214,6 @@ struct rockchip_vpu_dev {
 	struct rockchip_vpu_ctx *current_ctx;
 	wait_queue_head_t run_wq;
 	struct delayed_work watchdog_work;
-	struct rockchip_vpu_ctx *dummy_encode_ctx;
-	struct rockchip_vpu_aux_buf dummy_encode_src[VIDEO_MAX_PLANES];
-	struct rockchip_vpu_aux_buf dummy_encode_dst;
 	bool was_decoding;
 };
 
@@ -408,8 +398,12 @@ struct rockchip_vpu_ctx {
  * @fourcc:	FourCC code of the format. See V4L2_PIX_FMT_*.
  * @codec_mode:	Codec mode related to this format. See
  *		enum rockchip_vpu_codec_mode.
- * @num_planes:	Number of planes used by this format.
+ * @num_mplanes:	Number of memory planes (buffers).
+ * @num_cplanes:	Number of color planes used by this format
+ *			(for raw formats).
  * @depth:	Depth of each plane in bits per pixel.
+ * @v_subsampling:	Vertical subsampling factor
+ * @h_subsampling:	Horizontal subsampling factor
  * @enc_fmt:	Format identifier for encoder registers.
  * @frmsize:	Supported range of frame sizes (only for bitstream formats).
  */
@@ -417,8 +411,11 @@ struct rockchip_vpu_fmt {
 	char *name;
 	u32 fourcc;
 	enum rockchip_vpu_codec_mode codec_mode;
-	int num_planes;
+	int num_mplanes;
+	int num_cplanes;
 	u8 depth[VIDEO_MAX_PLANES];
+	u8 h_subsampling[VIDEO_MAX_PLANES];
+	u8 v_subsampling[VIDEO_MAX_PLANES];
 	enum rk3288_vpu_enc_fmt enc_fmt;
 	struct v4l2_frmsize_stepwise frmsize;
 };
@@ -682,20 +679,14 @@ static inline bool rockchip_vpu_ctx_is_encoder(struct rockchip_vpu_ctx *ctx)
 	return ctx->vpu_dst_fmt->codec_mode != RK_VPU_CODEC_NONE;
 }
 
-static inline bool
-rockchip_vpu_ctx_is_dummy_encode(struct rockchip_vpu_ctx *ctx)
-{
-	struct rockchip_vpu_dev *dev = ctx->dev;
-
-	return ctx == dev->dummy_encode_ctx;
-}
-
 static inline unsigned int rockchip_vpu_rounded_luma_size(unsigned int w,
 							  unsigned int h)
 {
 	return round_up(w, MB_DIM) * round_up(h, MB_DIM);
 }
 
+void rockchip_vpu_update_planes(const struct rockchip_vpu_fmt *fmt,
+				struct v4l2_pix_format_mplane *pix_fmt_mp);
 int rockchip_vpu_ctrls_setup(struct rockchip_vpu_ctx *ctx,
 			   const struct v4l2_ctrl_ops *ctrl_ops,
 			   struct rockchip_vpu_control *controls,

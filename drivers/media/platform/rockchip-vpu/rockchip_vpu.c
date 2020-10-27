@@ -30,7 +30,6 @@
 #include <media/v4l2-event.h>
 #include <linux/workqueue.h>
 #include <linux/of.h>
-#include <linux/dma-iommu.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
 
@@ -117,30 +116,6 @@ static void rockchip_vpu_flush_done(struct rockchip_vpu_ctx *ctx)
 	v4l2_event_queue_fh(&ctx->fh, &event);
 }
 
-static struct rockchip_vpu_ctx *
-rockchip_vpu_encode_after_decode_war(struct rockchip_vpu_ctx *ctx)
-{
-	struct rockchip_vpu_dev *dev = ctx->dev;
-	struct rockchip_vpu_buf *src;
-
-	/*
-	 * Flush buffer is a no-op, so no need for the workaround.
-	 * Since ctx was dequeued from ready_ctxs list, we know that it has
-	 * at least one buffer in each queue.
-	 */
-	src = list_first_entry(&ctx->src_queue, struct rockchip_vpu_buf, list);
-	if (src == &ctx->flush_buf)
-		return ctx;
-
-	if (!dev->dummy_encode_ctx)
-		return ctx;
-
-	if (dev->was_decoding && rockchip_vpu_ctx_is_encoder(ctx))
-		return dev->dummy_encode_ctx;
-
-	return ctx;
-}
-
 static void rockchip_vpu_try_run(struct rockchip_vpu_dev *dev)
 {
 	struct rockchip_vpu_ctx *ctx = NULL;
@@ -164,43 +139,24 @@ static void rockchip_vpu_try_run(struct rockchip_vpu_dev *dev)
 
 	ctx = list_entry(dev->ready_ctxs.next, struct rockchip_vpu_ctx, list);
 
-	/*
-	 * WAR for corrupted hardware state when encoding directly after
-	 * certain decoding runs.
-	 *
-	 * If previous context was decoding and currently picked one is
-	 * encoding then we need to execute a dummy encode with proper
-	 * settings to reinitialize certain internal hardware state.
-	 */
-	ctx = rockchip_vpu_encode_after_decode_war(ctx);
-
-	if (!rockchip_vpu_ctx_is_dummy_encode(ctx)) {
-		list_del_init(&ctx->list);
-		__rockchip_vpu_dequeue_run_locked(ctx);
-	}
-
-	vpu_debug(1, "setting ctx: %p\n", ctx);
+	list_del_init(&ctx->list);
+	__rockchip_vpu_dequeue_run_locked(ctx);
 
 	dev->current_ctx = ctx;
 
-	if (rockchip_vpu_ctx_is_flush(ctx)) {
-		vpu_debug(1, "ctx->stopped = true\n");
+	if (rockchip_vpu_ctx_is_flush(ctx))
 		ctx->stopped = true;
-	} else {
+	else
 		dev->was_decoding = !rockchip_vpu_ctx_is_encoder(ctx);
-		vpu_debug(1, "dev->was_decoding = %d\n", dev->was_decoding);
-	}
 
 out:
 	spin_unlock_irqrestore(&dev->irqlock, flags);
 
 	if (ctx) {
 		if (rockchip_vpu_ctx_is_flush(ctx)) {
-			vpu_debug(1, "rockchip_vpu_ctx_is_flush\n");
 			/* Flush is an entirely software operation. */
 			rockchip_vpu_run_done(ctx, VB2_BUF_STATE_DONE);
 		} else {
-			vpu_debug(1, "to => rockchip_vpu_prepare_run\n");
 			rockchip_vpu_prepare_run(ctx);
 			rockchip_vpu_run(ctx);
 		}
@@ -235,21 +191,17 @@ void rockchip_vpu_run_done(struct rockchip_vpu_ctx *ctx,
 	if (rockchip_vpu_ctx_is_flush(ctx)) {
 		rockchip_vpu_flush_done(ctx);
 	} else {
+		struct vb2_v4l2_buffer *vb2_src = &ctx->run.src->b;
+		struct vb2_v4l2_buffer *vb2_dst = &ctx->run.dst->b;
+
 		if (ctx->run_ops->run_done)
 			ctx->run_ops->run_done(ctx, result);
 
-		if (!rockchip_vpu_ctx_is_dummy_encode(ctx)) {
-			struct vb2_v4l2_buffer *vb2_src = &ctx->run.src->b;
-			struct vb2_v4l2_buffer *vb2_dst = &ctx->run.dst->b;
-
-			vb2_dst->timestamp = vb2_src->timestamp;
-			vb2_buffer_done(&vb2_src->vb2_buf, result);
-			vb2_buffer_done(&vb2_dst->vb2_buf, result);
-		}
+		vb2_dst->timestamp = vb2_src->timestamp;
+		vb2_buffer_done(&vb2_src->vb2_buf, result);
+		vb2_buffer_done(&vb2_dst->vb2_buf, result);
 	}
 
-	vpu_debug(1, "setting ctx to NULL\n");
-	vpu_debug(1, "expected:%p where:%p\n", dev->current_ctx, ctx);
 	dev->current_ctx = NULL;
 	wake_up_all(&dev->run_wq);
 
@@ -303,6 +255,28 @@ void write_header(u32 value, u32 *buffer, u32 offset, u32 len)
 		buffer[word] &= ~(((1 << len) - 1) << bit);
 		buffer[word] |= value << bit;
 	}
+}
+
+void rockchip_vpu_update_planes(const struct rockchip_vpu_fmt *fmt,
+				struct v4l2_pix_format_mplane *pix_fmt_mp)
+{
+	size_t sizeimage_total = 0;
+	int i;
+
+	for (i = 0; i < fmt->num_cplanes; ++i) {
+		pix_fmt_mp->plane_fmt[i].bytesperline =
+			(pix_fmt_mp->width / fmt->h_subsampling[i])
+			* fmt->depth[i] / 8;
+
+		pix_fmt_mp->plane_fmt[i].sizeimage =
+			pix_fmt_mp->plane_fmt[i].bytesperline
+			* pix_fmt_mp->height / fmt->v_subsampling[i];
+
+		sizeimage_total += pix_fmt_mp->plane_fmt[i].sizeimage;
+	}
+
+	if (fmt->num_mplanes == 1)
+		pix_fmt_mp->plane_fmt[0].sizeimage = sizeimage_total;
 }
 
 /*
@@ -674,7 +648,6 @@ static const struct v4l2_file_operations rockchip_vpu_fops = {
 
 /* Supported VPU variants. */
 static const struct of_device_id of_rockchip_vpu_match[] = {
-	{ .compatible = "rockchip,rk3288-vpu", .data = &rk3288_vpu_variant, },
 	{ .compatible = "rockchip,rk3399-vpu", .data = &rk3399_vpu_variant, },
 	{ .compatible = "rockchip,rk3399-vdec", .data = &rk3399_vdec_variant, },
 	{ /* sentinel */ }
@@ -738,90 +711,6 @@ err_dev_reg:
 	return ret;
 }
 
-static int rockchip_vpu_iommu_init(struct rockchip_vpu_dev *vpu)
-{
-	struct iommu_group *group;
-	int ret;
-
-	vpu->domain = iommu_domain_alloc(&platform_bus_type);
-	if (!vpu->domain) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ret = iommu_get_dma_cookie(vpu->domain);
-	if (ret)
-		goto err;
-
-	group = iommu_group_get(vpu->dev);
-	if (!group) {
-		group = iommu_group_alloc();
-		if (IS_ERR(group))
-			goto err;
-		ret = iommu_group_add_device(group, vpu->dev);
-		iommu_group_put(group);
-		if (ret)
-			goto err;
-	}
-
-	return 0;
-
-err:
-	dev_err(vpu->dev, "Failed to setup IOMMU\n");
-
-	if(vpu->domain) {
-		iommu_domain_free(vpu->domain);
-	}
-
-	return ret;
-}
-
-static int rockchip_vpu_iommu_attach(struct rockchip_vpu_dev *vpu)
-{
-	int ret;
-
-	if (!vpu->domain) {
-		dev_err(vpu->dev, "Missing iommu domain\n");
-		return -ENODEV;
-	}
-
-	ret = dma_set_coherent_mask(vpu->dev, DMA_BIT_MASK(32));
-	if (ret) {
-		dev_err(vpu->dev, "Failed to set coherent mask\n");
-		return ret;
-	}
-
-	dma_set_max_seg_size(vpu->dev, DMA_BIT_MASK(32));
-
-	ret = iommu_attach_device(vpu->domain, vpu->dev);
-	if (ret) {
-		dev_err(vpu->dev, "Failed to attach iommu device\n");
-		return ret;
-	}
-
-	if (!common_iommu_setup_dma_ops(vpu->dev, 0x10000000, SZ_2G, vpu->domain->ops)) {
-		dev_err(vpu->dev, "Failed to set dma_ops\n");
-		iommu_detach_device(vpu->domain, vpu->dev);
-		ret = -ENODEV;
-	}
-
-	return ret;
-}
-
-static void rockchip_vpu_iommu_detach(struct rockchip_vpu_dev *vpu)
-{
-	if (vpu->domain) {
-		iommu_detach_device(vpu->domain, vpu->dev);
-	}
-}
-
-static void rockchip_vpu_iommu_cleanup(struct rockchip_vpu_dev *vpu)
-{
-	if (vpu->domain) {
-		iommu_domain_free(vpu->domain);
-	}
-}
-
 static int rockchip_vpu_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *match;
@@ -855,9 +744,6 @@ static int rockchip_vpu_probe(struct platform_device *pdev)
 	}
 
 	vpu->variant->clk_enable(vpu);
-
-	rockchip_vpu_iommu_init(vpu);
-	rockchip_vpu_iommu_attach(vpu);
 
 	pm_runtime_set_autosuspend_delay(vpu->dev, 100);
 	pm_runtime_use_autosuspend(vpu->dev);
@@ -911,24 +797,10 @@ static int rockchip_vpu_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (vpu->variant->needs_enc_after_dec_war) {
-		ret = rockchip_vpu_enc_init_dummy_ctx(vpu);
-		if (ret) {
-			dev_err(&pdev->dev,
-				"Failed to create dummy encode context\n");
-			goto err_dummy_enc;
-		}
-	}
-
 	vpu_debug_leave();
 
 	return 0;
 
-err_dummy_enc:
-	if (vpu->vfd_enc) {
-		video_unregister_device(vpu->vfd_enc);
-		video_device_release(vpu->vfd_enc);
-	}
 err_enc_reg:
 	if (vpu->vfd_dec) {
 		video_unregister_device(vpu->vfd_dec);
@@ -942,8 +814,6 @@ err_dma_contig_vm:
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx);
 err_dma_contig:
 	pm_runtime_disable(vpu->dev);
-	rockchip_vpu_iommu_detach(vpu);
-	rockchip_vpu_iommu_cleanup(vpu);
 	vpu->variant->clk_disable(vpu);
 err_hw_probe:
 	pr_debug("%s-- with error\n", __func__);
@@ -974,14 +844,10 @@ static int rockchip_vpu_remove(struct platform_device *pdev)
 		video_unregister_device(vpu->vfd_dec);
 		video_device_release(vpu->vfd_dec);
 	}
-	if (vpu->variant->needs_enc_after_dec_war)
-		rockchip_vpu_enc_free_dummy_ctx(vpu);
 	v4l2_device_unregister(&vpu->v4l2_dev);
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx_vm);
 	vb2_dma_contig_cleanup_ctx(vpu->alloc_ctx);
 	pm_runtime_disable(vpu->dev);
-	rockchip_vpu_iommu_detach(vpu);
-	rockchip_vpu_iommu_cleanup(vpu);
 	vpu->variant->clk_disable(vpu);
 
 	vpu_debug_leave();
@@ -996,7 +862,6 @@ static int rockchip_vpu_suspend(struct device *dev)
 
 	set_bit(VPU_SUSPENDED, &vpu->state);
 	wait_event(vpu->run_wq, vpu->current_ctx == NULL);
-	rockchip_vpu_iommu_detach(vpu);
 
 	return 0;
 }
@@ -1006,7 +871,6 @@ static int rockchip_vpu_resume(struct device *dev)
 	struct rockchip_vpu_dev *vpu = dev_get_drvdata(dev);
 
 	clear_bit(VPU_SUSPENDED, &vpu->state);
-	rockchip_vpu_iommu_attach(vpu);
 	rockchip_vpu_try_run(vpu);
 
 	return 0;

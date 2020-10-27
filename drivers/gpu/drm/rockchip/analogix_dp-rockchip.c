@@ -367,6 +367,10 @@ static int rockchip_dp_bind(struct device *dev, struct device *master,
 			return -EINVAL;
 		}
 
+    dev_info(dev, "panel name:%s,type:%s, parent:%s.\n", 
+      panel_node->name, panel_node->type,
+      panel_node->parent->name); 
+
 		panel = of_drm_find_panel(panel_node);
 		if (!panel) {
 			DRM_ERROR("failed to find panel\n");

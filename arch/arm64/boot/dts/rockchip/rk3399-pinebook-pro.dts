@@ -34,11 +34,6 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-
-		drm_logo: drm-logo@00000000 {
-			compatible = "rockchip,drm-logo";
-			reg = <0x0 0x0 0x0 0x0>;
-		};
 	};
 
 	backlight: edp-backlight {
@@ -148,8 +143,15 @@
 		status = "okay";
 
 		ports {
-			panel_in_edp: endpoint {
-				remote-endpoint = <&edp_out_panel>;
+       port@0 {
+        reg = <0>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        panel_in_edp: endpoint@0 {
+          reg = <0>;
+          remote-endpoint = <&edp_out_panel>;
+        };
 			};
 		};
 	};
@@ -424,22 +426,13 @@
 	status = "okay";
 
 	ports = <&vopb_out>, <&vopl_out>;
-	logo-memory-region = <&drm_logo>;
 
 	route {
 		route_dp: route-dp {
-			logo,uboot = "logo.bmp";
-			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
-			charge_logo,mode = "center";
 			connect = <&vopl_out_dp>;
 		};
 
 		route_edp: route-edp {
-			logo,uboot = "logo.bmp";
-			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
-			charge_logo,mode = "center";
 			connect = <&vopb_out_edp>;
 		};
 	};
@@ -786,6 +779,7 @@
 
 &saradc {
 	status = "okay";
+  vref-supply = <&vcc_1v8>;
 };
 
 &threshold {
@@ -1125,6 +1119,7 @@
 	status = "okay";
 	assigned-clocks = <&cru DCLK_VOP1_DIV>;
 	assigned-clock-parents = <&cru PLL_CPLL>;
+  rockchip,grf = <&grf>;
 };
 
 &vopl_mmu {
@@ -1135,6 +1130,7 @@
 	status = "okay";
 	assigned-clocks = <&cru DCLK_VOP0_DIV>;
 	assigned-clock-parents = <&cru PLL_VPLL>;
+  rockchip,grf = <&grf>;
 };
 
 &vopb_mmu {

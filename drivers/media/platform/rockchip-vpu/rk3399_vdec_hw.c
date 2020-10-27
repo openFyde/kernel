@@ -29,14 +29,17 @@ static const struct rockchip_vpu_fmt rk3399_vdec_fmts[] = {
 		.name = "4:2:0 1 plane Y/CbCr",
 		.fourcc = V4L2_PIX_FMT_NV12,
 		.codec_mode = RK_VPU_CODEC_NONE,
-		.num_planes = 1,
-		.depth = { 12 },
+		.num_mplanes = 1,
+		.num_cplanes = 2,
+		.depth = { 8, 16 },
+		.v_subsampling = { 1, 2 },
+		.h_subsampling = { 1, 2 },
 	},
 	{
 		.name = "Slices of H264 Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_H264_SLICE,
 		.codec_mode = RK_VPU_CODEC_H264D,
-		.num_planes = 1,
+		.num_mplanes = 1,
 		.frmsize = {
 			.min_width = 48,
 			.max_width = 3840,
@@ -50,7 +53,7 @@ static const struct rockchip_vpu_fmt rk3399_vdec_fmts[] = {
 		.name = "Frames of VP9 Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_VP9_FRAME,
 		.codec_mode = RK_VPU_CODEC_VP9D,
-		.num_planes = 1,
+		.num_mplanes = 1,
 		.frmsize = {
 			.min_width = 48,
 			.max_width = 3840,
@@ -69,10 +72,7 @@ static const struct rockchip_vpu_fmt rk3399_vdec_fmts[] = {
 static irqreturn_t rk3399_vdec_irq(int irq, void *dev_id)
 {
 	struct rockchip_vpu_dev *vpu = dev_id;
-	u32 status;
-	
-	vpu_debug_enter();
-	status = vdpu_read(vpu, RKVDEC_REG_INTERRUPT);
+	u32 status = vdpu_read(vpu, RKVDEC_REG_INTERRUPT);
 
 	vpu_debug(5, "dec status %x\n", status);
 
@@ -80,8 +80,6 @@ static irqreturn_t rk3399_vdec_irq(int irq, void *dev_id)
 
 	if (status & RKVDEC_IRQ)
 		rockchip_vpu_irq_done(vpu);
-
-	vpu_debug_leave();
 
 	return IRQ_HANDLED;
 }

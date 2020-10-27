@@ -25,11 +25,16 @@
 #define RKV_VP9D_PROBE_SIZE		4864
 #define RKV_VP9D_COUNT_SIZE		13232
 #define RKV_VP9D_MAX_SEGMAP_SIZE	73728
+#define RKV_VP9D_NUM_SEGMAP		2
+
+struct rk3399_vdec_vp9d_segmap {
+	u8 data[RKV_VP9D_MAX_SEGMAP_SIZE];
+};
+
 /* Data structure describing auxiliary buffer format. */
 struct rk3399_vdec_vp9d_priv_tbl {
 	u8 prob_table[RKV_VP9D_PROBE_SIZE];
-	u8 segmap[RKV_VP9D_MAX_SEGMAP_SIZE];
-	u8 segmap_last[RKV_VP9D_MAX_SEGMAP_SIZE];
+	struct rk3399_vdec_vp9d_segmap segmap[RKV_VP9D_NUM_SEGMAP];
 };
 
 enum {
@@ -306,7 +311,7 @@ int rk3399_vdec_vp9d_init(struct rockchip_vpu_ctx *ctx)
 
 	memset(&ctx->hw.vp9d.last_info, 0, sizeof(ctx->hw.vp9d.last_info));
 	ctx->hw.vp9d.mv_base_addr = 0;
-	ctx->hw.vp9d.last_info.last_segid_flag = true;
+	ctx->hw.vp9d.last_info.segmap_idx = true;
 
 	return 0;
 }
@@ -613,16 +618,8 @@ static void rk3399_vdec_vp9d_config_registers(struct rockchip_vpu_ctx *ctx)
 	}
 
 	if (!intra_only && !(frmhdr->flags &
-			     V4L2_VP9_FRAME_HDR_FLAG_ERR_RES)) {
+			     V4L2_VP9_FRAME_HDR_FLAG_ERR_RES))
 		last_info->mv_base_addr = ctx->hw.vp9d.mv_base_addr;
-
-		if (!(frmhdr->sgmnt_params.flags &
-		      V4L2_VP9_SGMNT_PARAM_FLAG_ENABLED &&
-			!(frmhdr->sgmnt_params.flags &
-			  V4L2_VP9_SGMNT_PARAM_FLAG_UPDATE_MAP)))
-			last_info->last_segid_flag =
-				!last_info->last_segid_flag;
-	}
 
 	/* store mv base address, before yuv_virstride change */
 	ctx->hw.vp9d.mv_base_addr =
@@ -771,22 +768,20 @@ static void rk3399_vdec_vp9d_config_registers(struct rockchip_vpu_ctx *ctx)
 	hw_base = ctx->hw.vp9d.priv_dst.dma;
 	vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9COUNT_BASE);
 
-	if (last_info->last_segid_flag) {
-		hw_base = ctx->hw.vp9d.priv_tbl.dma +
-			offsetof(struct rk3399_vdec_vp9d_priv_tbl, segmap_last);
-		vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9_SEGIDCUR_BASE);
-		hw_base = ctx->hw.vp9d.priv_tbl.dma +
-			offsetof(struct rk3399_vdec_vp9d_priv_tbl, segmap);
-		vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9_SEGIDLAST_BASE);
-	} else {
-		hw_base = ctx->hw.vp9d.priv_tbl.dma +
-			offsetof(struct rk3399_vdec_vp9d_priv_tbl, segmap);
-		vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9_SEGIDCUR_BASE);
-		hw_base = ctx->hw.vp9d.priv_tbl.dma +
-			offsetof(struct rk3399_vdec_vp9d_priv_tbl, segmap_last);
-		vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9_SEGIDLAST_BASE);
-	}
+	hw_base = ctx->hw.vp9d.priv_tbl.dma +
+		offsetof(struct rk3399_vdec_vp9d_priv_tbl,
+			 segmap[!last_info->segmap_idx]);
+	vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9_SEGIDCUR_BASE);
+	hw_base = ctx->hw.vp9d.priv_tbl.dma +
+		offsetof(struct rk3399_vdec_vp9d_priv_tbl,
+			 segmap[last_info->segmap_idx]);
+	vdpu_write_relaxed(vpu, hw_base, RKVDEC_REG_VP9_SEGIDLAST_BASE);
 
+	if ((frmhdr->sgmnt_params.flags &
+	     V4L2_VP9_SGMNT_PARAM_FLAG_ENABLED) &&
+	    (frmhdr->sgmnt_params.flags &
+	     V4L2_VP9_SGMNT_PARAM_FLAG_UPDATE_MAP))
+		last_info->segmap_idx = !last_info->segmap_idx;
 
 	if (!last_info->mv_base_addr)
 		last_info->mv_base_addr = ctx->hw.vp9d.mv_base_addr;
@@ -1275,8 +1270,9 @@ void rk3399_vdec_vp9d_done(struct rockchip_vpu_ctx *ctx,
 			(frmhdr->sgmnt_params.feature_enabled[i][3] << 3);
 	}
 
-	last_info->segmentation_enable = frmhdr->sgmnt_params.flags &
-		V4L2_VP9_SGMNT_PARAM_FLAG_ENABLED;
+	last_info->segmentation_enable |=
+		frmhdr->sgmnt_params.flags & V4L2_VP9_SGMNT_PARAM_FLAG_ENABLED;
+
 	last_info->show_frame = frmhdr->flags &
 		V4L2_VP9_FRAME_HDR_FLAG_SHOW_FRAME;
 	last_info->width = frmhdr->frame_width;

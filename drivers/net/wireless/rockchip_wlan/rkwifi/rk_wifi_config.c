@@ -17,7 +17,7 @@
  * Set Firmware Path
  */
  
-#define VENDOR_ETC_FIRMWARE "/vendor/etc/firmware/"
+#define VENDOR_ETC_FIRMWARE "/lib/firmware/"
 #define SYSTEM_ETC_FIRMWARE "/system/etc/firmware/"
 char ANDROID_FW_PATH[64] = {0};
 

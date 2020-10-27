@@ -4,8 +4,8 @@
 # What library to link
 ldflags()
 {
-	pkg-config --libs ncursesw 2>/dev/null && exit
-	pkg-config --libs ncurses 2>/dev/null && exit
+	$PKG_CONFIG --libs ncursesw 2>/dev/null && exit
+	$PKG_CONFIG --libs ncurses 2>/dev/null && exit
 	for ext in so a dll.a dylib ; do
 		for lib in ncursesw ncurses curses ; do
 			$cc -print-file-name=lib${lib}.${ext} | grep -q /
@@ -21,9 +21,9 @@ ldflags()
 # Where is ncurses.h?
 ccflags()
 {
-	if pkg-config --cflags ncursesw 2>/dev/null; then
+	if $PKG_CONFIG --cflags ncursesw 2>/dev/null; then
 		echo '-DCURSES_LOC="<ncurses.h>" -DNCURSES_WIDECHAR=1'
-	elif pkg-config --cflags ncurses 2>/dev/null; then
+	elif $PKG_CONFIG --cflags ncurses 2>/dev/null; then
 		echo '-DCURSES_LOC="<ncurses.h>"'
 	elif [ -f /usr/include/ncursesw/curses.h ]; then
 		echo '-I/usr/include/ncursesw -DCURSES_LOC="<curses.h>"'

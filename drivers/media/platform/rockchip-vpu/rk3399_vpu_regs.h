@@ -556,7 +556,8 @@
 #define VDPU_REG_VP8_ADDR_REF2_5(i)		(0x218 + ((i) * 0x4))
 #define     VDPU_REG_VP8_GREF_SIGN_BIAS			BIT(0)
 #define     VDPU_REG_VP8_AREF_SIGN_BIAS			BIT(0)
-#define VDPU_REG_VP8_DCT_BASE(i)		(0x230 + ((i) * 0x4))
+#define VDPU_REG_VP8_DCT_BASE(i)		\
+		(0x230 + ((((i) < 5) ? (i) : ((i) + 1)) * 0x4))
 #define VDPU_REG_VP8_ADDR_CTRL_PART		0x244
 #define VDPU_REG_VP8_ADDR_REF1			0x250
 #define VDPU_REG_VP8_SEGMENT_VAL		0x254

@@ -450,26 +450,6 @@ static int vidioc_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	return 0;
 }
 
-static void calculate_plane_sizes(const struct rockchip_vpu_fmt *fmt,
-				  struct v4l2_pix_format_mplane *pix_fmt_mp)
-{
-	unsigned int w = pix_fmt_mp->width;
-	unsigned int h = pix_fmt_mp->height;
-	int i;
-
-	for (i = 0; i < fmt->num_planes; ++i) {
-		pix_fmt_mp->plane_fmt[i].bytesperline = w * fmt->depth[i] / 8;
-		pix_fmt_mp->plane_fmt[i].sizeimage = h *
-					pix_fmt_mp->plane_fmt[i].bytesperline;
-		/*
-		 * All of multiplanar formats we support have chroma
-		 * planes subsampled by 2 vertically.
-		 */
-		if (i != 0)
-			pix_fmt_mp->plane_fmt[i].sizeimage /= 2;
-	}
-}
-
 static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 {
 	struct rockchip_vpu_dev *dev = video_drvdata(file);
@@ -489,8 +469,8 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 
 		fmt = find_format(dev, pix_fmt_mp->pixelformat, true);
 		if (!fmt) {
-			vpu_err("failed to try capture format\n");
-			return -EINVAL;
+			fmt = ctx->vpu_dst_fmt;
+			pix_fmt_mp->pixelformat = fmt->fourcc;
 		}
 
 		if (pix_fmt_mp->plane_fmt[0].sizeimage == 0) {
@@ -506,14 +486,11 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 
 		fmt = find_format(dev, pix_fmt_mp->pixelformat, false);
 		if (!fmt) {
-			vpu_err("failed to try output format\n");
-			return -EINVAL;
+			fmt = ctx->vpu_src_fmt;
+			pix_fmt_mp->pixelformat = fmt->fourcc;
 		}
 
-		if (fmt->num_planes != pix_fmt_mp->num_planes) {
-			vpu_err("plane number mismatches on output format\n");
-			return -EINVAL;
-		}
+		pix_fmt_mp->num_planes = fmt->num_mplanes;
 
 		/* Limit to hardware min/max. */
 		pix_fmt_mp->width = clamp(pix_fmt_mp->width,
@@ -533,7 +510,7 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 			  MB_HEIGHT(pix_fmt_mp->height));
 
 		/* Fill in remaining fields. */
-		calculate_plane_sizes(fmt, pix_fmt_mp);
+		rockchip_vpu_update_planes(fmt, pix_fmt_mp);
 
 		/* TODO(crbug.com/824662): handle sizeimage in Chromium.
 		 * Align plane size to full cache line by adjusting the height.
@@ -543,7 +520,7 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 		 */
 		dma_align = dma_get_cache_alignment();
 		need_alignment = false;
-		for (i = 0; i < fmt->num_planes; i++) {
+		for (i = 0; i < fmt->num_mplanes; i++) {
 			if (!IS_ALIGNED(pix_fmt_mp->plane_fmt[i].sizeimage,
 					dma_align)) {
 				need_alignment = true;
@@ -559,7 +536,7 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 				return -EINVAL;
 			}
 			/* Fill in remaining fields again. */
-			calculate_plane_sizes(fmt, pix_fmt_mp);
+			rockchip_vpu_update_planes(fmt, pix_fmt_mp);
 		}
 		break;
 
@@ -586,9 +563,9 @@ static void reset_src_fmt(struct rockchip_vpu_ctx *ctx)
 	src_fmt->width = vpu_dst_fmt->frmsize.min_width;
 	src_fmt->height = vpu_dst_fmt->frmsize.min_height;
 	src_fmt->pixelformat = ctx->vpu_src_fmt->fourcc;
-	src_fmt->num_planes = ctx->vpu_src_fmt->num_planes;
+	src_fmt->num_planes = ctx->vpu_src_fmt->num_mplanes;
 
-	calculate_plane_sizes(ctx->vpu_src_fmt, src_fmt);
+	rockchip_vpu_update_planes(ctx->vpu_src_fmt, src_fmt);
 }
 
 static int vidioc_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
@@ -1192,7 +1169,7 @@ static int rockchip_vpu_queue_setup(struct vb2_queue *vq,
 
 	switch (vq->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
-		*plane_count = ctx->vpu_dst_fmt->num_planes;
+		*plane_count = ctx->vpu_dst_fmt->num_mplanes;
 
 		if (*buf_count < 1)
 			*buf_count = 1;
@@ -1207,7 +1184,7 @@ static int rockchip_vpu_queue_setup(struct vb2_queue *vq,
 		break;
 
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
-		*plane_count = ctx->vpu_src_fmt->num_planes;
+		*plane_count = ctx->vpu_src_fmt->num_mplanes;
 
 		if (*buf_count < 1)
 			*buf_count = 1;
@@ -1215,7 +1192,7 @@ static int rockchip_vpu_queue_setup(struct vb2_queue *vq,
 		if (*buf_count > VIDEO_MAX_FRAME)
 			*buf_count = VIDEO_MAX_FRAME;
 
-		for (i = 0; i < ctx->vpu_src_fmt->num_planes; ++i) {
+		for (i = 0; i < ctx->vpu_src_fmt->num_mplanes; ++i) {
 			psize[i] = ctx->src_fmt.plane_fmt[i].sizeimage;
 			vpu_debug(0, "output psize[%d]: %d\n", i, psize[i]);
 			allocators[i] = ctx->dev->alloc_ctx;
@@ -1255,7 +1232,7 @@ static int rockchip_vpu_buf_prepare(struct vb2_buffer *vb)
 		break;
 
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
-		for (i = 0; i < ctx->vpu_src_fmt->num_planes; ++i) {
+		for (i = 0; i < ctx->vpu_src_fmt->num_mplanes; ++i) {
 			vpu_debug(4, "plane %d size: %ld, sizeimage: %u\n", i,
 					vb2_plane_size(vb, i),
 					ctx->src_fmt.plane_fmt[i].sizeimage);
@@ -1268,7 +1245,7 @@ static int rockchip_vpu_buf_prepare(struct vb2_buffer *vb)
 			}
 		}
 
-		if (i != ctx->vpu_src_fmt->num_planes)
+		if (i != ctx->vpu_src_fmt->num_mplanes)
 			ret = -EINVAL;
 		break;
 
@@ -1280,6 +1257,76 @@ static int rockchip_vpu_buf_prepare(struct vb2_buffer *vb)
 	vpu_debug_leave();
 
 	return ret;
+}
+
+/*
+ * FIXME: The operation below should be done in the userspace.
+ * This driver is going to be replaced by a proper upstream driver
+ * in the future, so we will just keep this as is for the time being.
+ */
+
+#define VP8_KEY_FRAME_HDR_SIZE			10
+#define VP8_INTER_FRAME_HDR_SIZE		3
+
+#define VP8_FRAME_TAG_KEY_FRAME_BIT		BIT(0)
+#define VP8_FRAME_TAG_LENGTH_SHIFT		5
+#define VP8_FRAME_TAG_LENGTH_MASK		(0x7ffff << 5)
+
+/*
+ * The hardware takes care only of ext hdr and dct partition. The software
+ * must take care of frame header.
+ *
+ * Buffer layout as received from hardware:
+ *   |<--gap-->|<--ext hdr-->|<-gap->|<---dct part---
+ *   |<-------dct part offset------->|
+ *
+ * Required buffer layout:
+ *   |<--hdr-->|<--ext hdr-->|<---dct part---
+ */
+static void
+rockchip_vpu_vp8e_assemble_bitstream(struct rockchip_vpu_ctx *ctx,
+				     struct rockchip_vpu_buf *dst_buf)
+{
+	struct vb2_v4l2_buffer *vb2_dst = &dst_buf->b;
+	size_t ext_hdr_size = dst_buf->vp8e.ext_hdr_size;
+	size_t dct_size = dst_buf->vp8e.dct_size;
+	size_t hdr_size = dst_buf->vp8e.hdr_size;
+	size_t dst_size;
+	size_t tag_size;
+	void *dst;
+	u32 *tag;
+
+	dst_size = vb2_plane_size(&vb2_dst->vb2_buf, 0);
+	dst = vb2_plane_vaddr(&vb2_dst->vb2_buf, 0);
+	tag = dst; /* To access frame tag words. */
+
+	if (WARN_ON(hdr_size + ext_hdr_size + dct_size > dst_size))
+		return;
+	if (WARN_ON(dst_buf->vp8e.dct_offset + dct_size > dst_size))
+		return;
+
+	vpu_debug(1, "%s: hdr_size = %zu, ext_hdr_size = %zu, dct_size = %zu\n",
+			__func__, hdr_size, ext_hdr_size, dct_size);
+
+	memmove(dst + hdr_size + ext_hdr_size,
+		dst + dst_buf->vp8e.dct_offset, dct_size);
+	memcpy(dst, dst_buf->vp8e.header, hdr_size);
+
+	/* Patch frame tag at first 32-bit word of the frame. */
+	if (vb2_dst->flags & V4L2_BUF_FLAG_KEYFRAME) {
+		tag_size = VP8_KEY_FRAME_HDR_SIZE;
+		tag[0] &= ~VP8_FRAME_TAG_KEY_FRAME_BIT;
+	} else {
+		tag_size = VP8_INTER_FRAME_HDR_SIZE;
+		tag[0] |= VP8_FRAME_TAG_KEY_FRAME_BIT;
+	}
+
+	tag[0] &= ~VP8_FRAME_TAG_LENGTH_MASK;
+	tag[0] |= (hdr_size + ext_hdr_size - tag_size)
+						<< VP8_FRAME_TAG_LENGTH_SHIFT;
+
+	vb2_set_plane_payload(&vb2_dst->vb2_buf, 0,
+				hdr_size + ext_hdr_size + dct_size);
 }
 
 static void rockchip_vpu_buf_finish(struct vb2_buffer *vb)
@@ -1302,7 +1349,7 @@ static void rockchip_vpu_buf_finish(struct vb2_buffer *vb)
 		 * TODO(akahuang): This function is not only used for RK3388.
 		 * Rename it (or maybe move it to the VP8 plugin).
 		 */
-		rk3288_vpu_vp8e_assemble_bitstream(ctx, buf);
+		rockchip_vpu_vp8e_assemble_bitstream(ctx, buf);
 	}
 	vpu_debug_leave();
 }
@@ -1534,128 +1581,3 @@ void rockchip_vpu_enc_exit(struct rockchip_vpu_ctx *ctx)
 	rockchip_vpu_aux_buf_free(vpu, &ctx->run.priv_dst);
 	rockchip_vpu_aux_buf_free(vpu, &ctx->run.priv_src);
 };
-
-/*
- * WAR for encoder state corruption after decoding
- */
-
-static const struct rockchip_vpu_run_ops dummy_encode_run_ops = {
-	/* No ops needed for dummy encoding. */
-};
-
-#define DUMMY_W		64
-#define DUMMY_H		64
-#define DUMMY_SRC_FMT	V4L2_PIX_FMT_YUYV
-#define DUMMY_DST_FMT	V4L2_PIX_FMT_VP8
-#define DUMMY_DST_SIZE	(32 * 1024)
-
-int rockchip_vpu_enc_init_dummy_ctx(struct rockchip_vpu_dev *dev)
-{
-	struct rockchip_vpu_ctx *ctx;
-	int ret;
-	int i;
-
-	ctx = devm_kzalloc(dev->dev, sizeof(*ctx), GFP_KERNEL);
-	if (!ctx)
-		return -ENOMEM;
-
-	ctx->dev = dev;
-
-	ctx->vpu_src_fmt = find_format(dev, DUMMY_SRC_FMT, false);
-	ctx->src_fmt.width = DUMMY_W;
-	ctx->src_fmt.height = DUMMY_H;
-	ctx->src_fmt.pixelformat = ctx->vpu_src_fmt->fourcc;
-	ctx->src_fmt.num_planes = ctx->vpu_src_fmt->num_planes;
-
-	calculate_plane_sizes(ctx->vpu_src_fmt, &ctx->src_fmt);
-
-	ctx->vpu_dst_fmt = find_format(dev, DUMMY_DST_FMT, true);
-	ctx->dst_fmt.width = ctx->src_fmt.width;
-	ctx->dst_fmt.height = ctx->src_fmt.height;
-	ctx->dst_fmt.pixelformat = ctx->vpu_dst_fmt->fourcc;
-	ctx->dst_fmt.plane_fmt[0].sizeimage = DUMMY_DST_SIZE;
-	ctx->dst_fmt.plane_fmt[0].bytesperline = 0;
-	ctx->dst_fmt.num_planes = 1;
-
-	INIT_LIST_HEAD(&ctx->src_queue);
-
-	ctx->src_crop.left = 0;
-	ctx->src_crop.top = 0;
-	ctx->src_crop.width = ctx->src_fmt.width;
-	ctx->src_crop.left = ctx->src_fmt.height;
-
-	INIT_LIST_HEAD(&ctx->dst_queue);
-	INIT_LIST_HEAD(&ctx->list);
-
-	ctx->run.vp8e.reg_params =
-		(struct rockchip_reg_params *)
-		rk3288_vpu_vp8e_get_dummy_params();
-	ctx->run_ops = &dummy_encode_run_ops;
-
-	ctx->run.dst = devm_kzalloc(dev->dev, sizeof(*ctx->run.dst),
-					GFP_KERNEL);
-	if (!ctx->run.dst)
-		return -ENOMEM;
-
-	ret = rockchip_vpu_aux_buf_alloc(dev, &ctx->run.priv_src,
-					ROCKCHIP_HW_PARAMS_SIZE);
-	if (ret)
-		return ret;
-
-	ret = rockchip_vpu_aux_buf_alloc(dev, &ctx->run.priv_dst,
-					ROCKCHIP_RET_PARAMS_SIZE);
-	if (ret)
-		goto err_free_priv_src;
-
-	for (i = 0; i < ctx->src_fmt.num_planes; ++i) {
-		ret = rockchip_vpu_aux_buf_alloc(dev, &dev->dummy_encode_src[i],
-					ctx->src_fmt.plane_fmt[i].sizeimage);
-		if (ret)
-			goto err_free_src;
-
-		memset(dev->dummy_encode_src[i].cpu, 0,
-			dev->dummy_encode_src[i].size);
-	}
-
-	ret = rockchip_vpu_aux_buf_alloc(dev, &dev->dummy_encode_dst,
-					ctx->dst_fmt.plane_fmt[0].sizeimage);
-	if (ret)
-		goto err_free_src;
-
-	memset(dev->dummy_encode_dst.cpu, 0, dev->dummy_encode_dst.size);
-
-	ret = rockchip_vpu_init(ctx);
-	if (ret)
-		goto err_free_dst;
-
-	dev->dummy_encode_ctx = ctx;
-
-	return 0;
-
-err_free_dst:
-	rockchip_vpu_aux_buf_free(dev, &dev->dummy_encode_dst);
-err_free_src:
-	for (i = 0; i < ctx->src_fmt.num_planes; ++i)
-		if (dev->dummy_encode_src[i].cpu)
-			rockchip_vpu_aux_buf_free(dev,
-						  &dev->dummy_encode_src[i]);
-	rockchip_vpu_aux_buf_free(dev, &ctx->run.priv_dst);
-err_free_priv_src:
-	rockchip_vpu_aux_buf_free(dev, &ctx->run.priv_src);
-
-	return ret;
-}
-
-void rockchip_vpu_enc_free_dummy_ctx(struct rockchip_vpu_dev *dev)
-{
-	struct rockchip_vpu_ctx *ctx = dev->dummy_encode_ctx;
-	int i;
-
-	rockchip_vpu_deinit(ctx);
-
-	for (i = 0; i < ctx->src_fmt.num_planes; ++i)
-		rockchip_vpu_aux_buf_free(dev, &dev->dummy_encode_src[i]);
-	rockchip_vpu_aux_buf_free(dev, &dev->dummy_encode_dst);
-	rockchip_vpu_aux_buf_free(dev, &ctx->run.priv_src);
-	rockchip_vpu_aux_buf_free(dev, &ctx->run.priv_dst);
-}

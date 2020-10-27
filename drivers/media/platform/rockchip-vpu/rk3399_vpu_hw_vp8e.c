@@ -88,7 +88,7 @@ static const int ac_q_lookup[QINDEX_RANGE] = {
 	249, 254, 259, 264, 269, 274, 279, 284
 };
 
-static const int32_t qrounding_factors[QINDEX_RANGE] = {
+static const int32_t const qrounding_factors[QINDEX_RANGE] = {
 	56, 56, 56, 56, 56, 56, 56, 56, 48, 48,
 	48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
 	48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
@@ -104,7 +104,7 @@ static const int32_t qrounding_factors[QINDEX_RANGE] = {
 	48, 48, 48, 48, 48, 48, 48, 48
 };
 
-static const int32_t qzbin_factors[QINDEX_RANGE] = {
+static const int32_t const qzbin_factors[QINDEX_RANGE] = {
 	64, 64, 64, 64, 80, 80, 80, 80, 80, 80,
 	80, 80, 80, 80, 80, 80, 80, 80, 80, 80,
 	80, 80, 80, 80, 80, 80, 80, 80, 80, 80,
@@ -186,7 +186,7 @@ static struct tree mv_tree[] = {
  * p / 256, scaled by a magic number 256,
  * i.e., cost[p] = round(log2(256 / p) * 256).
  */
-static const s32 vp8_prob_cost[] = {
+static const s32 const vp8_prob_cost[] = {
 	2048, 2048, 1792, 1642, 1536, 1454, 1386, 1329, 1280, 1236,
 	1198, 1162, 1130, 1101, 1073, 1048, 1024, 1002,  980,  961,
 	942,  924,  906,  890,  874,  859,  845,  831,  817,  804,

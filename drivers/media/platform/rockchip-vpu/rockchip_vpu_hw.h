@@ -69,53 +69,6 @@ enum rk3288_vpu_enc_fmt {
 };
 
 /**
- * struct rk3288_vp8e_reg_params - low level encoding parameters
- * TODO: Create abstract structures for more generic controls or just
- *       remove unused fields.
- */
-struct rk3288_vp8e_reg_params {
-	u32 unused_00[5];
-	u32 hdr_len;
-	u32 unused_18[8];
-	u32 enc_ctrl;
-	u32 unused_3c;
-	u32 enc_ctrl0;
-	u32 enc_ctrl1;
-	u32 enc_ctrl2;
-	u32 enc_ctrl3;
-	u32 enc_ctrl5;
-	u32 enc_ctrl4;
-	u32 str_hdr_rem_msb;
-	u32 str_hdr_rem_lsb;
-	u32 unused_60;
-	u32 mad_ctrl;
-	u32 unused_68;
-	u32 qp_val[8];
-	u32 bool_enc;
-	u32 vp8_ctrl0;
-	u32 rlc_ctrl;
-	u32 mb_ctrl;
-	u32 unused_9c[14];
-	u32 rgb_yuv_coeff[2];
-	u32 rgb_mask_msb;
-	u32 intra_area_ctrl;
-	u32 cir_intra_ctrl;
-	u32 unused_e8[2];
-	u32 first_roi_area;
-	u32 second_roi_area;
-	u32 mvc_ctrl;
-	u32 unused_fc;
-	u32 intra_penalty[7];
-	u32 unused_11c;
-	u32 seg_qp[24];
-	u32 dmv_4p_1p_penalty[32];
-	u32 dmv_qpel_penalty[32];
-	u32 vp8_ctrl1;
-	u32 bit_cost_golden;
-	u32 loop_flt_delta[2];
-};
-
-/**
  * struct rk3288_h264e_reg_params - low level encoding parameters
  * TODO: Create abstract structures for more generic controls or just
  *       remove unused fields.
@@ -188,7 +141,6 @@ struct rockchip_reg_params {
 	/* Mode-specific data. */
 	union {
 		const struct rk3288_h264e_reg_params rk3288_h264e;
-		const struct rk3288_vp8e_reg_params rk3288_vp8e;
 		const struct rk3399_vp8e_reg_params rk3399_vp8e;
 	};
 };
@@ -259,7 +211,7 @@ struct rockchip_vpu_vp9d_last_info {
 	s16 feature_data[8][4];
 	u8 feature_mask[8];
 	dma_addr_t mv_base_addr;
-	bool last_segid_flag;
+	bool segmap_idx;
 };
 
 struct rockchip_vpu_vp9d_counts {
@@ -327,7 +279,6 @@ struct rockchip_vpu_hw_ctx {
 	};
 };
 
-extern const struct rockchip_vpu_variant rk3288_vpu_variant;
 extern const struct rockchip_vpu_variant rk3399_vpu_variant;
 extern const struct rockchip_vpu_variant rk3399_vdec_variant;
 
@@ -340,34 +291,6 @@ void rockchip_vpu_deinit(struct rockchip_vpu_ctx *ctx);
 void rockchip_vpu_run(struct rockchip_vpu_ctx *ctx);
 
 void rockchip_vpu_irq_done(struct rockchip_vpu_dev *vpu);
-
-/* Run ops for rk3288 H264 decoder */
-int rk3288_vpu_h264d_init(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_h264d_exit(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_h264d_run(struct rockchip_vpu_ctx *ctx);
-
-/* Run ops for rk3288 h264 encoder */
-int rk3288_vpu_h264e_init(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_h264e_exit(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_h264e_run(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_h264e_done(struct rockchip_vpu_ctx *ctx,
-			   enum vb2_buffer_state result);
-
-/* Run ops for rk3288 VP8 decoder */
-int rk3288_vpu_vp8d_init(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_vp8d_exit(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_vp8d_run(struct rockchip_vpu_ctx *ctx);
-
-/* Run ops for rk3288 VP8 encoder */
-int rk3288_vpu_vp8e_init(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_vp8e_exit(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_vp8e_run(struct rockchip_vpu_ctx *ctx);
-void rk3288_vpu_vp8e_done(struct rockchip_vpu_ctx *ctx,
-			  enum vb2_buffer_state result);
-const struct rk3288_vp8e_reg_params *rk3288_vpu_vp8e_get_dummy_params(void);
-
-void rk3288_vpu_vp8e_assemble_bitstream(struct rockchip_vpu_ctx *ctx,
-					struct rockchip_vpu_buf *dst_buf);
 
 /* Run ops for rk3399 vpu H264 encoder */
 int rk3399_vpu_h264e_init(struct rockchip_vpu_ctx *ctx);

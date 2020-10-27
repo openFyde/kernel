@@ -58,7 +58,7 @@ static char *ssv6xxx_cmd_buf;
 char *ssv6xxx_result_buf;
 extern struct ssv6xxx_cfg_cmd_table cfg_cmds[];
 extern struct ssv6xxx_cfg ssv_cfg;
-char DEFAULT_CFG_PATH[] = "/vendor/etc/firmware/ssv6051-wifi.cfg";
+char DEFAULT_CFG_PATH[] = "/lib/firmware/ssv6051-wifi.cfg";
 static int ssv6xxx_dbg_open(struct inode *inode, struct file *filp)
 {
     filp->private_data = inode->i_private;

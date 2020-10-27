@@ -30,32 +30,44 @@ static const struct rockchip_vpu_fmt rk3399_vpu_enc_fmts[] = {
 		.name = "4:2:0 3 planes Y/Cb/Cr",
 		.fourcc = V4L2_PIX_FMT_YUV420M,
 		.codec_mode = RK_VPU_CODEC_NONE,
-		.num_planes = 3,
-		.depth = { 8, 4, 4 },
+		.num_mplanes = 3,
+		.num_cplanes = 3,
+		.depth = { 8, 8, 8 },
+		.h_subsampling = { 1, 2, 2 },
+		.v_subsampling = { 1, 2, 2 },
 		.enc_fmt = RK3288_VPU_ENC_FMT_YUV420P,
 	},
 	{
 		.name = "4:2:0 2 plane Y/CbCr",
 		.fourcc = V4L2_PIX_FMT_NV12M,
 		.codec_mode = RK_VPU_CODEC_NONE,
-		.num_planes = 2,
-		.depth = { 8, 8 },
+		.num_mplanes = 2,
+		.num_cplanes = 2,
+		.depth = { 8, 16 },
+		.h_subsampling = { 1, 2 },
+		.v_subsampling = { 1, 2 },
 		.enc_fmt = RK3288_VPU_ENC_FMT_YUV420SP,
 	},
 	{
 		.name = "4:2:2 1 plane YUYV",
 		.fourcc = V4L2_PIX_FMT_YUYV,
 		.codec_mode = RK_VPU_CODEC_NONE,
-		.num_planes = 1,
+		.num_mplanes = 1,
+		.num_cplanes = 1,
 		.depth = { 16 },
+		.h_subsampling = { 1 },
+		.v_subsampling = { 1 },
 		.enc_fmt = RK3288_VPU_ENC_FMT_YUYV422,
 	},
 	{
 		.name = "4:2:2 1 plane UYVY",
 		.fourcc = V4L2_PIX_FMT_UYVY,
 		.codec_mode = RK_VPU_CODEC_NONE,
-		.num_planes = 1,
+		.num_mplanes = 1,
+		.num_cplanes = 1,
 		.depth = { 16 },
+		.h_subsampling = { 1 },
+		.v_subsampling = { 1 },
 		.enc_fmt = RK3288_VPU_ENC_FMT_UYVY422,
 	},
 	/* Destination formats. */
@@ -63,7 +75,7 @@ static const struct rockchip_vpu_fmt rk3399_vpu_enc_fmts[] = {
 		.name = "VP8 Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_VP8,
 		.codec_mode = RK_VPU_CODEC_VP8E,
-		.num_planes = 1,
+		.num_mplanes = 1,
 		.frmsize = {
 			.min_width = 96,
 			.max_width = 1920,
@@ -77,7 +89,7 @@ static const struct rockchip_vpu_fmt rk3399_vpu_enc_fmts[] = {
 		.name = "H264 Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_H264,
 		.codec_mode = RK_VPU_CODEC_H264E,
-		.num_planes = 1,
+		.num_mplanes = 1,
 		.frmsize = {
 			.min_width = 96,
 			.max_width = 1920,
@@ -91,7 +103,7 @@ static const struct rockchip_vpu_fmt rk3399_vpu_enc_fmts[] = {
 		.name = "JPEG Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_JPEG_RAW,
 		.codec_mode = RK_VPU_CODEC_JPEGE,
-		.num_planes = 1,
+		.num_mplanes = 1,
 		.frmsize = {
 			.min_width = 96,
 			.max_width = 8192,
@@ -108,14 +120,17 @@ static const struct rockchip_vpu_fmt rk3399_vpu_dec_fmts[] = {
 		.name = "4:2:0 1 plane Y/CbCr",
 		.fourcc = V4L2_PIX_FMT_NV12,
 		.codec_mode = RK_VPU_CODEC_NONE,
-		.num_planes = 1,
-		.depth = { 12 },
+		.num_mplanes = 1,
+		.num_cplanes = 2,
+		.depth = { 8, 16 },
+		.h_subsampling = { 1, 2 },
+		.v_subsampling = { 1, 2 },
 	},
 	{
 		.name = "Frames of VP8 Encoded Stream",
 		.fourcc = V4L2_PIX_FMT_VP8_FRAME,
 		.codec_mode = RK_VPU_CODEC_VP8D,
-		.num_planes = 1,
+		.num_mplanes = 1,
 		.frmsize = {
 			.min_width = 48,
 			.max_width = 1920,
@@ -134,10 +149,7 @@ static const struct rockchip_vpu_fmt rk3399_vpu_dec_fmts[] = {
 static irqreturn_t rk3399_vepu_irq(int irq, void *dev_id)
 {
 	struct rockchip_vpu_dev *vpu = dev_id;
-	u32 status;
-	
-	vpu_debug_enter();
-	status = vepu_read(vpu, VEPU_REG_INTERRUPT);
+	u32 status = vepu_read(vpu, VEPU_REG_INTERRUPT);
 
 	vepu_write(vpu, 0, VEPU_REG_INTERRUPT);
 
@@ -147,18 +159,13 @@ static irqreturn_t rk3399_vepu_irq(int irq, void *dev_id)
 		rockchip_vpu_irq_done(vpu);
 	}
 
-	vpu_debug_leave();
-
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t rk3399_vdpu_irq(int irq, void *dev_id)
 {
 	struct rockchip_vpu_dev *vpu = dev_id;
-	u32 status;
-	
-	vpu_debug_enter();
-	status = vdpu_read(vpu, VDPU_REG_INTERRUPT);
+	u32 status = vdpu_read(vpu, VDPU_REG_INTERRUPT);
 
 	vdpu_write(vpu, 0, VDPU_REG_INTERRUPT);
 
@@ -169,7 +176,6 @@ static irqreturn_t rk3399_vdpu_irq(int irq, void *dev_id)
 
 		rockchip_vpu_irq_done(vpu);
 	}
-	vpu_debug_leave();
 
 	return IRQ_HANDLED;
 }

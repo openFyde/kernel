@@ -570,6 +570,14 @@ static void rk3399_vp8d_cfg_parts(struct rockchip_vpu_ctx *ctx)
 		- (mb_offset_bytes - hdr->first_part_offset)
 		+ (mb_offset_bytes & DEC_8190_ALIGN_MASK);
 
+	/*
+	 * It seems like the hardware does something wrong in calculating the
+	 * macroblock size from vp8d_mb_start_bit and vp8d_mb_aligned_data_len,
+	 * which requires this extra increment in vp8d_mb_aligned_data_len to
+	 * work around it.
+	 */
+	mb_size++;
+
 	/* mb data aligned base addr */
 	vdpu_write_relaxed(vpu, (mb_offset_bytes & (~DEC_8190_ALIGN_MASK))
 				+ src_dma, VDPU_REG_VP8_ADDR_CTRL_PART);

@@ -44,11 +44,6 @@ void rockchip_vpu_power_on(struct rockchip_vpu_dev *vpu)
 
 static void rockchip_vpu_power_off(struct rockchip_vpu_dev *vpu)
 {
-	if (!vpu || !vpu->dev) {
-		vpu_debug(0, "rockchip_vpu_power_off: missing vpu or dev\n");
-		return;
-	}
-
 	vpu_debug_enter();
 
 	pm_runtime_mark_last_busy(vpu->dev);
@@ -65,37 +60,12 @@ static void rockchip_vpu_power_off(struct rockchip_vpu_dev *vpu)
 
 void rockchip_vpu_irq_done(struct rockchip_vpu_dev *vpu)
 {
-	struct rockchip_vpu_ctx *ctx;
-	
-	vpu_debug_enter();
-
-	if (!vpu) {
-		vpu_debug(0, "rockchip_vpu_irq_done: missing vpu\n");
-		vpu_debug_leave();
-		return;
-	}
-	
-	ctx = vpu->current_ctx;
+	struct rockchip_vpu_ctx *ctx = vpu->current_ctx;
 
 	rockchip_vpu_power_off(vpu);
 	cancel_delayed_work(&vpu->watchdog_work);
 
-	if (!ctx) {
-		vpu_debug(0, "rockchip_vpu_irq_done: missing ctx\n");
-		vpu_debug_leave();
-		return;
-	}
-
-	vpu_debug(1, "rockchip_vpu_irq_done: does have ctx!\n");
-
-	if (!ctx->hw.codec_ops) {
-		vpu_debug(0, "rockchip_vpu_irq_done: missing ctx->hw.codecs_ops\n");
-		vpu_debug_leave();
-		return;
-	}
-
 	ctx->hw.codec_ops->done(ctx, VB2_BUF_STATE_DONE);
-	vpu_debug_leave();
 }
 
 void rockchip_vpu_watchdog(struct work_struct *work)
