@@ -155,7 +155,6 @@ config HAVE_ARCH_HARDENED_USERCOPY
 config HARDENED_USERCOPY
 	bool "Harden memory copies between kernel and userspace"
 	depends on HAVE_ARCH_HARDENED_USERCOPY
-	depends on HAVE_HARDENED_USERCOPY_ALLOCATOR
 	select BUG
 	help
 	  This option checks for obviously wrong memory regions when
@@ -177,13 +176,54 @@ config HARDENED_USERCOPY_PAGESPAN
 	  been removed. This config is intended to be used only while
 	  trying to find such users.
 
+config FORTIFY_SOURCE
+	bool "Harden common str/mem functions against buffer overflows"
+	depends on ARCH_HAS_FORTIFY_SOURCE
+	help
+	  Detect overflows of buffers in common string and memory functions
+	  where the compiler can determine and validate the buffer sizes.
+
+config STATIC_USERMODEHELPER
+	bool "Force all usermode helper calls through a single binary"
+	help
+	  By default, the kernel can call many different userspace
+	  binary programs through the "usermode helper" kernel
+	  interface.  Some of these binaries are statically defined
+	  either in the kernel code itself, or as a kernel configuration
+	  option.  However, some of these are dynamically created at
+	  runtime, or can be modified after the kernel has started up.
+	  To provide an additional layer of security, route all of these
+	  calls through a single executable that can not have its name
+	  changed.
+
+	  Note, it is up to this single binary to then call the relevant
+	  "real" usermode helper binary, based on the first argument
+	  passed to it.  If desired, this program can filter and pick
+	  and choose what real programs are called.
+
+	  If you wish for all usermode helper programs are to be
+	  disabled, choose this option and then set
+	  STATIC_USERMODEHELPER_PATH to an empty string.
+
+config STATIC_USERMODEHELPER_PATH
+	string "Path to the static usermode helper binary"
+	depends on STATIC_USERMODEHELPER
+	default "/sbin/usermode-helper"
+	help
+	  The binary called by the kernel when any usermode helper
+	  program is wish to be run.  The "real" application's name will
+	  be in the first argument passed to this program on the command
+	  line.
+
+	  If you wish for all usermode helper programs to be disabled,
+	  specify an empty string here (i.e. "").
+
 source security/selinux/Kconfig
 source security/smack/Kconfig
 source security/tomoyo/Kconfig
 source security/apparmor/Kconfig
 source security/yama/Kconfig
-
-source security/optee_linuxdriver/Kconfig
+source security/chromiumos/Kconfig
 
 source security/integrity/Kconfig
 
@@ -224,5 +264,13 @@ config DEFAULT_SECURITY
 	default "apparmor" if DEFAULT_SECURITY_APPARMOR
 	default "" if DEFAULT_SECURITY_DAC
 
-endmenu
+config ARCH_HAS_ALT_SYSCALL
+	def_bool n
 
+config ALT_SYSCALL
+	bool "Alternate syscall table support"
+	depends on ARCH_HAS_ALT_SYSCALL
+	help
+	  Allow syscall table to be swapped on a running process.
+
+endmenu

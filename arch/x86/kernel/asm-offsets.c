@@ -32,6 +32,10 @@ void common(void) {
 	OFFSET(TI_flags, thread_info, flags);
 	OFFSET(TI_status, thread_info, status);
 	OFFSET(TI_addr_limit, thread_info, addr_limit);
+#ifdef CONFIG_ALT_SYSCALL
+  OFFSET(TASK_TI_nr_syscalls, task_struct, thread_info.nr_syscalls);
+  OFFSET(TASK_TI_sys_call_table, task_struct, thread_info.sys_call_table);
+#endif
 
 	BLANK();
 	OFFSET(crypto_tfm_ctx_offset, crypto_tfm, __crt_ctx);
