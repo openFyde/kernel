@@ -102,6 +102,9 @@ static const char * const mem_cgroup_events_names[] = {
 	"pgpgout",
 	"pgfault",
 	"pgmajfault",
+  "pgmajfault_s",
+  "pgmajfault_a",
+  "pgmajfault_f",
 };
 
 static const char * const mem_cgroup_lru_names[] = {
@@ -1362,6 +1365,7 @@ static bool mem_cgroup_out_of_memory(struct mem_cgroup *memcg, gfp_t gfp_mask,
 	 */
 	if (fatal_signal_pending(current) || task_will_free_mem(current)) {
 		mark_oom_victim(current);
+    wake_oom_reaper(current);
 		goto unlock;
 	}
 
@@ -3187,11 +3191,11 @@ static int memcg_stat_show(struct seq_file *m, void *v)
 	for (i = 0; i < MEM_CGROUP_EVENTS_NSTATS; i++)
 		seq_printf(m, "%s %lu\n", mem_cgroup_events_names[i],
 			   mem_cgroup_read_events(memcg, i));
-
+ 
 	for (i = 0; i < NR_LRU_LISTS; i++)
 		seq_printf(m, "%s %lu\n", mem_cgroup_lru_names[i],
 			   mem_cgroup_nr_lru_pages(memcg, BIT(i)) * PAGE_SIZE);
-
+ 
 	/* Hierarchical information */
 	memory = memsw = PAGE_COUNTER_MAX;
 	for (mi = memcg; mi; mi = parent_mem_cgroup(mi)) {

@@ -380,6 +380,7 @@ enum {
 	MM_FILEPAGES,
 	MM_ANONPAGES,
 	MM_SWAPENTS,
+  MM_SHMEMPAGES,  /* Resident shared memory pages */
 	NR_MM_COUNTERS
 };
 

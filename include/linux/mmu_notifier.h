@@ -9,6 +9,9 @@
 struct mmu_notifier;
 struct mmu_notifier_ops;
 
+/* mmu_notifier_ops flags */
+#define MMU_INVALIDATE_DOES_NOT_BLOCK (0x01)
+
 #ifdef CONFIG_MMU_NOTIFIER
 
 /*
@@ -25,6 +28,7 @@ struct mmu_notifier_mm {
 };
 
 struct mmu_notifier_ops {
+  int flags;
 	/*
 	 * Called either by mmu_notifier_unregister or when the mm is
 	 * being destroyed by exit_mmap, always before all pages are
@@ -228,6 +232,7 @@ extern void __mmu_notifier_invalidate_range_end(struct mm_struct *mm,
 				  unsigned long start, unsigned long end);
 extern void __mmu_notifier_invalidate_range(struct mm_struct *mm,
 				  unsigned long start, unsigned long end);
+extern bool mm_has_blockable_invalidate_notifiers(struct mm_struct *mm);
 
 static inline void mmu_notifier_release(struct mm_struct *mm)
 {

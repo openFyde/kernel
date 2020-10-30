@@ -35,6 +35,12 @@
 #include <linux/freezer.h>
 #include <linux/ftrace.h>
 #include <linux/ratelimit.h>
+#include <linux/kthread.h>
+#include <linux/init.h>
+#include <linux/mmu_notifier.h>
+
+#include <asm/tlb.h>
+#include "internal.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/oom.h>
@@ -269,6 +275,13 @@ enum oom_scan_t oom_scan_process_thread(struct oom_control *oc,
 	if (oom_unkillable_task(task, NULL, oc->nodemask))
 		return OOM_SCAN_CONTINUE;
 
+  if (!is_sysrq_oom(oc) && tsk_is_oom_victim(task)) {
+    enum oom_scan_t ret = OOM_SCAN_ABORT;
+
+    if (test_bit(MMF_OOM_SKIP, &task->signal->oom_mm->flags))
+      ret = OOM_SCAN_CONTINUE;
+    return ret;
+  }
 	/*
 	 * This task already has access to memory reserves and is being killed.
 	 * Don't allow any other task to have access to the reserves.
@@ -407,6 +420,180 @@ static DECLARE_WAIT_QUEUE_HEAD(oom_victims_wait);
 
 bool oom_killer_disabled __read_mostly;
 
+#define K(x) ((x) << (PAGE_SHIFT-10))
+
+#ifdef CONFIG_MMU
+/*
+ * OOM Reaper kernel thread which tries to reap the memory used by the OOM
+ * victim (if that is possible) to help the OOM killer to move on.
+ */
+static struct task_struct *oom_reaper_th;
+static DECLARE_WAIT_QUEUE_HEAD(oom_reaper_wait);
+static struct task_struct *oom_reaper_list;
+static DEFINE_SPINLOCK(oom_reaper_lock);
+
+void __oom_reap_task_mm(struct mm_struct *mm)
+{
+  struct vm_area_struct *vma;
+
+  /*
+   * Tell all users of get_user/copy_from_user etc... that the content
+   * is no longer stable. No barriers really needed because unmapping
+   * should imply barriers already and the reader would hit a page fault
+   * if it stumbled over a reaped memory.
+   */
+  set_bit(MMF_UNSTABLE, &mm->flags);
+
+  for (vma = mm->mmap ; vma; vma = vma->vm_next) {
+    if (!can_madv_dontneed_vma(vma))
+      continue;
+
+    /*
+     * Only anonymous pages have a good chance to be dropped
+     * without additional steps which we cannot afford as we
+     * are OOM already.
+     *
+     * We do not even care about fs backed pages because all
+     * which are reclaimable have already been reclaimed and
+     * we do not want to block exit_mmap by keeping mm ref
+     * count elevated without a good reason.
+     */
+    if (vma_is_anonymous(vma) || !(vma->vm_flags & VM_SHARED)) {
+      const unsigned long start = vma->vm_start;
+      const unsigned long end = vma->vm_end;
+      struct mmu_gather tlb;
+
+      tlb_gather_mmu(&tlb, mm, start, end);
+      mmu_notifier_invalidate_range_start(mm, start, end);
+      unmap_page_range(&tlb, vma, start, end, NULL);
+      mmu_notifier_invalidate_range_end(mm, start, end);
+      tlb_finish_mmu(&tlb, start, end);
+    }
+  }
+}
+
+static bool oom_reap_task_mm(struct task_struct *tsk, struct mm_struct *mm)
+{
+  if (!down_read_trylock(&mm->mmap_sem)) {
+    return false;
+  }
+
+  /*
+   * If the mm has invalidate_{start,end}() notifiers that could block,
+   * sleep to give the oom victim some more time.
+   * TODO: we really want to get rid of this ugly hack and make sure that
+   * notifiers cannot block for unbounded amount of time
+   */
+  if (mm_has_blockable_invalidate_notifiers(mm)) {
+    up_read(&mm->mmap_sem);
+    schedule_timeout_idle(HZ);
+    return true;
+  }
+
+  /*
+   * MMF_OOM_SKIP is set by exit_mmap when the OOM reaper can't
+   * work on the mm anymore. The check for MMF_OOM_SKIP must run
+   * under mmap_sem for reading because it serializes against the
+   * down_write();up_write() cycle in exit_mmap().
+   */
+  if (test_bit(MMF_OOM_SKIP, &mm->flags)) {
+    up_read(&mm->mmap_sem);
+    return true;
+  }
+
+  __oom_reap_task_mm(mm);
+
+  pr_info("oom_reaper: reaped process %d (%s), now anon-rss:%lukB, file-rss:%lukB, shmem-rss:%lukB\n",
+      task_pid_nr(tsk), tsk->comm,
+      K(get_mm_counter(mm, MM_ANONPAGES)),
+      K(get_mm_counter(mm, MM_FILEPAGES)),
+      K(get_mm_counter(mm, MM_SHMEMPAGES)));
+  up_read(&mm->mmap_sem);
+
+  return true;
+}
+
+#define MAX_OOM_REAP_RETRIES 10
+static void oom_reap_task(struct task_struct *tsk)
+{
+  int attempts = 0;
+  struct mm_struct *mm = tsk->signal->oom_mm;
+
+  /* Retry the down_read_trylock(mmap_sem) a few times */
+  while (attempts++ < MAX_OOM_REAP_RETRIES && !oom_reap_task_mm(tsk, mm))
+    schedule_timeout_idle(HZ/10);
+
+  if (attempts <= MAX_OOM_REAP_RETRIES)
+    goto done;
+
+  pr_info("oom_reaper: unable to reap pid:%d (%s)\n",
+    task_pid_nr(tsk), tsk->comm);
+  debug_show_all_locks();
+
+done:
+  tsk->oom_reaper_list = NULL;
+
+  /*
+   * Hide this mm from OOM killer because it has been either reaped or
+   * somebody can't call up_write(mmap_sem).
+   */
+  set_bit(MMF_OOM_SKIP, &mm->flags);
+
+  /* Drop a reference taken by wake_oom_reaper */
+  put_task_struct(tsk);
+}
+
+static int oom_reaper(void *unused)
+{
+  while (true) {
+    struct task_struct *tsk = NULL;
+
+    wait_event_freezable(oom_reaper_wait, oom_reaper_list != NULL);
+    spin_lock(&oom_reaper_lock);
+    if (oom_reaper_list != NULL) {
+      tsk = oom_reaper_list;
+      oom_reaper_list = tsk->oom_reaper_list;
+    }
+    spin_unlock(&oom_reaper_lock);
+
+    if (tsk)
+      oom_reap_task(tsk);
+  }
+
+  return 0;
+}
+
+void wake_oom_reaper(struct task_struct *tsk)
+{
+  if (!oom_reaper_th)
+    return;
+
+  /* mm is already queued? */
+  if (test_and_set_bit(MMF_OOM_REAP_QUEUED, &tsk->signal->oom_mm->flags))
+    return;
+
+  get_task_struct(tsk);
+
+  spin_lock(&oom_reaper_lock);
+  tsk->oom_reaper_list = oom_reaper_list;
+  oom_reaper_list = tsk;
+  spin_unlock(&oom_reaper_lock);
+  wake_up(&oom_reaper_wait);
+}
+
+static int __init oom_init(void)
+{
+  oom_reaper_th = kthread_run(oom_reaper, NULL, "oom_reaper");
+  if (IS_ERR(oom_reaper_th)) {
+    pr_err("Unable to start OOM reaper %ld. Continuing regardless\n",
+        PTR_ERR(oom_reaper_th));
+    oom_reaper_th = NULL;
+  }
+  return 0;
+}
+subsys_initcall(oom_init)
+#endif
+
 /**
  * mark_oom_victim - mark the given task as OOM victim
  * @tsk: task to mark
@@ -416,10 +603,17 @@ bool oom_killer_disabled __read_mostly;
  */
 void mark_oom_victim(struct task_struct *tsk)
 {
+  struct mm_struct *mm = tsk->mm;
 	WARN_ON(oom_killer_disabled);
 	/* OOM killer might race with memcg OOM */
 	if (test_and_set_tsk_thread_flag(tsk, TIF_MEMDIE))
 		return;
+
+  /* oom_mm is bound to the signal struct life time. */
+  if (!cmpxchg(&tsk->signal->oom_mm, NULL, mm)) {
+    atomic_inc(&tsk->signal->oom_mm->mm_count);
+    set_bit(MMF_OOM_VICTIM, &mm->flags);
+  }
 	/*
 	 * Make sure that the task is woken up from uninterruptible sleep
 	 * if it is frozen because OOM killer wouldn't be able to free
@@ -500,7 +694,6 @@ static bool process_shares_mm(struct task_struct *p, struct mm_struct *mm)
 	return false;
 }
 
-#define K(x) ((x) << (PAGE_SHIFT-10))
 /*
  * Must be called while holding a reference to p, which will be released upon
  * returning.
@@ -592,10 +785,12 @@ void oom_kill_process(struct oom_control *oc, struct task_struct *p,
 	 */
 	do_send_sig_info(SIGKILL, SEND_SIG_FORCED, victim, true);
 	mark_oom_victim(victim);
-	pr_err("Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB\n",
+  count_vm_event(OOM_KILL);
+	pr_err("Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB, shmem-rss:%lukB\n",
 		task_pid_nr(victim), victim->comm, K(victim->mm->total_vm),
 		K(get_mm_counter(victim->mm, MM_ANONPAGES)),
-		K(get_mm_counter(victim->mm, MM_FILEPAGES)));
+		K(get_mm_counter(victim->mm, MM_FILEPAGES)),
+    K(get_mm_counter(victim->mm, MM_SHMEMPAGES)));
 	task_unlock(victim);
 
 	/*

@@ -25,6 +25,7 @@
 #include <linux/rcupdate.h>
 #include <linux/wait.h>
 #include <linux/rbtree.h>
+#include <linux/uidgid.h>
 #include <uapi/linux/sysctl.h>
 
 /* For the /proc/sys support */
@@ -159,6 +160,9 @@ struct ctl_table_root {
 	struct ctl_table_set *(*lookup)(struct ctl_table_root *root,
 					   struct nsproxy *namespaces);
 	int (*permissions)(struct ctl_table_header *head, struct ctl_table *table);
+  void (*set_ownership)(struct ctl_table_header *head,
+            struct ctl_table *table,
+            kuid_t *uid, kgid_t *gid);
 };
 
 /* struct ctl_path describes where in the hierarchy a table is added */

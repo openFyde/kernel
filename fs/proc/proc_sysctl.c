@@ -432,6 +432,7 @@ static struct inode *proc_sys_make_inode(struct super_block *sb,
 {
 	struct inode *inode;
 	struct proc_inode *ei;
+  struct ctl_table_root *root = head->root;
 
 	inode = new_inode(sb);
 	if (!inode)
@@ -457,6 +458,9 @@ static struct inode *proc_sys_make_inode(struct super_block *sb,
 		if (is_empty_dir(head))
 			make_empty_dir_inode(inode);
 	}
+ 
+  if (root->set_ownership)
+    root->set_ownership(head, table, &inode->i_uid, &inode->i_gid);
 out:
 	return inode;
 }

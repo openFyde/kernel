@@ -437,6 +437,7 @@ extern signed long schedule_timeout(signed long timeout);
 extern signed long schedule_timeout_interruptible(signed long timeout);
 extern signed long schedule_timeout_killable(signed long timeout);
 extern signed long schedule_timeout_uninterruptible(signed long timeout);
+extern signed long schedule_timeout_idle(signed long timeout);
 asmlinkage void schedule(void);
 extern void schedule_preempt_disabled(void);
 
@@ -521,6 +522,10 @@ static inline int get_dumpable(struct mm_struct *mm)
 
 #define MMF_HAS_UPROBES		19	/* has uprobes */
 #define MMF_RECALC_UPROBES	20	/* MMF_HAS_UPROBES can be wrong */
+#define MMF_OOM_SKIP    21  /* mm is of no interest for the OOM killer */
+#define MMF_UNSTABLE    22  /* mm is unstable for copy_from_user */
+#define MMF_OOM_VICTIM    25  /* mm is the oom victim */
+#define MMF_OOM_REAP_QUEUED 26  /* mm was queued for oom_reaper */
 
 #define MMF_INIT_MASK		(MMF_DUMPABLE_MASK | MMF_DUMP_FILTER_MASK)
 
@@ -793,6 +798,8 @@ struct signal_struct {
 	short oom_score_adj;		/* OOM kill score adjustment */
 	short oom_score_adj_min;	/* OOM kill score adjustment min value.
 					 * Only settable by CAP_SYS_RESOURCE. */
+  struct mm_struct *oom_mm; /* recorded mm when the thread group got
+           * killed by the oom killer */ 
 
 	struct mutex cred_guard_mutex;	/* guard against foreign influences on
 					 * credential calculations
@@ -2012,6 +2019,9 @@ struct task_struct {
 	unsigned long	task_state_change;
 #endif
 	int pagefault_disabled;
+#ifdef CONFIG_MMU
+  struct task_struct *oom_reaper_list;
+#endif
 /* CPU-specific state of this task */
 	struct thread_struct thread;
 /*
@@ -2801,6 +2811,20 @@ static inline void mmdrop(struct mm_struct *mm)
 {
 	if (unlikely(atomic_dec_and_test(&mm->mm_count)))
 		__mmdrop(mm);
+}
+
+static inline void mmdrop_async_fn(struct work_struct *work)
+{
+  struct mm_struct *mm = container_of(work, struct mm_struct, async_put_work);
+  __mmdrop(mm);
+}
+
+static inline void mmdrop_async(struct mm_struct *mm)
+{
+  if (unlikely(atomic_dec_and_test(&mm->mm_count))) {
+    INIT_WORK(&mm->async_put_work, mmdrop_async_fn);
+    schedule_work(&mm->async_put_work);
+  }
 }
 
 static inline bool mmget_not_zero(struct mm_struct *mm)

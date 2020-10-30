@@ -22,9 +22,12 @@
 
 void task_mem(struct seq_file *m, struct mm_struct *mm)
 {
-	unsigned long data, text, lib, swap, ptes, pmds;
+	unsigned long data, text, lib, swap, ptes, pmds, anon, file, shmem;
 	unsigned long hiwater_vm, total_vm, hiwater_rss, total_rss;
 
+  anon = get_mm_counter(mm, MM_ANONPAGES);
+  file = get_mm_counter(mm, MM_FILEPAGES);
+  shmem = get_mm_counter(mm, MM_SHMEMPAGES); 
 	/*
 	 * Note: to minimize their overhead, mm maintains hiwater_vm and
 	 * hiwater_rss only when about to *lower* total_vm or rss.  Any
@@ -35,7 +38,7 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 	hiwater_vm = total_vm = mm->total_vm;
 	if (hiwater_vm < mm->hiwater_vm)
 		hiwater_vm = mm->hiwater_vm;
-	hiwater_rss = total_rss = get_mm_rss(mm);
+	hiwater_rss = total_rss = anon + file + shmem;
 	if (hiwater_rss < mm->hiwater_rss)
 		hiwater_rss = mm->hiwater_rss;
 
@@ -52,6 +55,9 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 		"VmPin:\t%8lu kB\n"
 		"VmHWM:\t%8lu kB\n"
 		"VmRSS:\t%8lu kB\n"
+    "RssAnon:\t%8lu kB\n"
+    "RssFile:\t%8lu kB\n"
+    "RssShmem:\t%8lu kB\n"
 		"VmData:\t%8lu kB\n"
 		"VmStk:\t%8lu kB\n"
 		"VmExe:\t%8lu kB\n"
@@ -65,6 +71,9 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 		mm->pinned_vm << (PAGE_SHIFT-10),
 		hiwater_rss << (PAGE_SHIFT-10),
 		total_rss << (PAGE_SHIFT-10),
+    anon << (PAGE_SHIFT-10),
+    file << (PAGE_SHIFT-10),
+    shmem << (PAGE_SHIFT-10),
 		data << (PAGE_SHIFT-10),
 		mm->stack_vm << (PAGE_SHIFT-10), text, lib,
 		ptes >> 10,
@@ -82,7 +91,8 @@ unsigned long task_statm(struct mm_struct *mm,
 			 unsigned long *shared, unsigned long *text,
 			 unsigned long *data, unsigned long *resident)
 {
-	*shared = get_mm_counter(mm, MM_FILEPAGES);
+	*shared = get_mm_counter(mm, MM_FILEPAGES) +
+      get_mm_counter(mm, MM_SHMEMPAGES);
 	*text = (PAGE_ALIGN(mm->end_code) - (mm->start_code & PAGE_MASK))
 								>> PAGE_SHIFT;
 	*data = mm->total_vm - mm->shared_vm;
@@ -484,6 +494,9 @@ struct mem_size_stats {
 	unsigned long shared_hugetlb;
 	unsigned long private_hugetlb;
 	u64 pss;
+  u64 pss_anon;
+  u64 pss_file;
+  u64 pss_shmem;
 	u64 swap_pss;
 };
 
@@ -491,15 +504,14 @@ static void smaps_account(struct mem_size_stats *mss, struct page *page,
 		unsigned long size, bool young, bool dirty)
 {
 	int mapcount;
-
-	if (PageAnon(page))
-		mss->anonymous += size;
+  u64 pss_delta;
 
 	mss->resident += size;
 	/* Accumulate the size in pages that have been accessed. */
 	if (young || page_is_young(page) || PageReferenced(page))
 		mss->referenced += size;
 	mapcount = page_mapcount(page);
+  pss_delta = (u64)size << PSS_SHIFT;
 	if (mapcount >= 2) {
 		u64 pss_delta;
 
@@ -507,16 +519,22 @@ static void smaps_account(struct mem_size_stats *mss, struct page *page,
 			mss->shared_dirty += size;
 		else
 			mss->shared_clean += size;
-		pss_delta = (u64)size << PSS_SHIFT;
 		do_div(pss_delta, mapcount);
-		mss->pss += pss_delta;
 	} else {
 		if (dirty || PageDirty(page))
 			mss->private_dirty += size;
 		else
 			mss->private_clean += size;
-		mss->pss += (u64)size << PSS_SHIFT;
 	}
+  mss->pss += pss_delta;
+  if (PageAnon(page)) {
+    mss->anonymous += size;
+    mss->pss_anon += pss_delta;
+  } else if (PageSwapBacked(page)) {
+    mss->pss_shmem += pss_delta;
+  } else {
+    mss->pss_file += pss_delta;
+  }
 }
 
 static void smaps_pte_entry(pte_t *pte, unsigned long addr,

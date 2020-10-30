@@ -6,6 +6,8 @@
 #include <linux/types.h>
 #include <linux/nodemask.h>
 #include <uapi/linux/oom.h>
+#include <linux/sched.h> /* MMF_* */
+#include <linux/mm.h> /* VM_FAULT* */
 
 struct zonelist;
 struct notifier_block;
@@ -81,6 +83,48 @@ extern void note_oom_kill(void);
 extern void oom_kill_process(struct oom_control *oc, struct task_struct *p,
 			     unsigned int points, unsigned long totalpages,
 			     struct mem_cgroup *memcg, const char *message);
+static inline bool tsk_is_oom_victim(struct task_struct * tsk)
+{
+  return tsk->signal->oom_mm;
+}
+/*
+ * Use this helper if tsk->mm != mm and the victim mm needs a special
+ * handling. This is guaranteed to stay true after once set.
+ */
+static inline bool mm_is_oom_victim(struct mm_struct *mm)
+{
+  return test_bit(MMF_OOM_VICTIM, &mm->flags);
+}
+
+/*
+ * Checks whether a page fault on the given mm is still reliable.
+ * This is no longer true if the oom reaper started to reap the
+ * address space which is reflected by MMF_UNSTABLE flag set in
+ * the mm. At that moment any !shared mapping would lose the content
+ * and could cause a memory corruption (zero pages instead of the
+ * original content).
+ *
+ * User should call this before establishing a page table entry for
+ * a !shared mapping and under the proper page table lock.
+ *
+ * Return 0 when the PF is safe VM_FAULT_SIGBUS otherwise.
+ */
+static inline int check_stable_address_space(struct mm_struct *mm)
+{
+  if (unlikely(test_bit(MMF_UNSTABLE, &mm->flags)))
+    return VM_FAULT_SIGBUS;
+  return 0;
+}
+
+void __oom_reap_task_mm(struct mm_struct *mm);
+
+#ifdef CONFIG_MMU
+extern void wake_oom_reaper(struct task_struct *tsk);
+#else
+static inline void wake_oom_reaper(struct task_struct *tsk)
+{
+}
+#endif
 
 extern void check_panic_on_oom(struct oom_control *oc,
 			       enum oom_constraint constraint,
