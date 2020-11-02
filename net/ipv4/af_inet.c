@@ -122,8 +122,8 @@
 #endif
 #include <net/l3mdev.h>
 
-#ifdef CONFIG_ANDROID_PARANOID_NETWORK
 #include <linux/android_aid.h>
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
 
 static inline int current_has_network(void)
 {
@@ -274,6 +274,9 @@ static int inet_create(struct net *net, struct socket *sock, int protocol,
 	if (protocol < 0 || protocol >= IPPROTO_MAX)
 		return -EINVAL;
 
+  if (!inet_sk_allowed(net, AID_INET))
+    return -EACCES;
+
 	if (!current_has_network())
 		return -EACCES;
 
@@ -325,7 +328,7 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
-	if (sock->type == SOCK_RAW && !kern && !capable(CAP_NET_RAW))
+	if (sock->type == SOCK_RAW && !kern && !android_ns_capable(net, CAP_NET_RAW))
 		goto out_rcu_unlock;
 
 	sock->ops = answer->ops;
@@ -401,6 +404,25 @@ out_rcu_unlock:
 	goto out;
 }
 
+/* A notification chain invoked when a socket is released. The action parameter
+ * passed to notification callbacks is always 0, the data parameter is the
+ * struct socket being released.
+ */
+static BLOCKING_NOTIFIER_HEAD(inet_release_notifier_chain);
+
+int inet_release_notifier_register(struct notifier_block *nb)
+{
+  return blocking_notifier_chain_register(&inet_release_notifier_chain,
+            nb);
+}
+EXPORT_SYMBOL(inet_release_notifier_register);
+
+int inet_release_notifier_unregister(struct notifier_block *nb)
+{
+  return blocking_notifier_chain_unregister(&inet_release_notifier_chain,
+              nb);
+}
+EXPORT_SYMBOL(inet_release_notifier_unregister);
 
 /*
  *	The peer socket should always be NULL (or else). When we call this
@@ -415,7 +437,8 @@ int inet_release(struct socket *sock)
 		long timeout;
 
 #ifdef CONFIG_NETFILTER_XT_MATCH_QTAGUID
-		qtaguid_untag(sock, true);
+    blocking_notifier_call_chain(&inet_release_notifier_chain, 0,
+               sock);
 #endif
 		/* Applications forget to leave groups before exiting */
 		ip_mc_drop_socket(sk);

@@ -1013,14 +1013,11 @@ static int ip6_dst_lookup_tail(struct net *net, const struct sock *sk,
 		}
 	}
 #endif
-#if defined(CONFIG_ANDROID_VERSION) && CONFIG_ANDROID_VERSION < ANDROID_VERSION(8, 0, 0, 0)
-#else
 	if (ipv6_addr_v4mapped(&fl6->saddr) &&
 	    !(ipv6_addr_v4mapped(&fl6->daddr) || ipv6_addr_any(&fl6->daddr))) {
 		err = -EAFNOSUPPORT;
 		goto out_err_release;
 	}
-#endif
 
 	return 0;
 

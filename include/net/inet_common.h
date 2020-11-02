@@ -45,4 +45,9 @@ static inline void inet_ctl_sock_destroy(struct sock *sk)
 		sock_release(sk->sk_socket);
 }
 
+struct notifier_block;
+
+int inet_release_notifier_register(struct notifier_block *nb);
+int inet_release_notifier_unregister(struct notifier_block *nb);
+
 #endif

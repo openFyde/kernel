@@ -64,8 +64,8 @@
 #include <asm/uaccess.h>
 #include <linux/mroute6.h>
 
-#ifdef CONFIG_ANDROID_PARANOID_NETWORK
 #include <linux/android_aid.h>
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
 
 static inline int current_has_network(void)
 {
@@ -126,8 +126,8 @@ static int inet6_create(struct net *net, struct socket *sock, int protocol,
 	if (protocol < 0 || protocol >= IPPROTO_MAX)
 		return -EINVAL;
 
-	if (!current_has_network())
-		return -EACCES;
+  if (!inet_sk_allowed(net, AID_INET))
+    return -EACCES;
 
 	/* Look for the requested type/protocol pair. */
 lookup_protocol:
@@ -175,7 +175,7 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
-	if (sock->type == SOCK_RAW && !kern && !capable(CAP_NET_RAW))
+	if (sock->type == SOCK_RAW && !kern && !ns_capable(net->user_ns, CAP_NET_RAW))
 		goto out_rcu_unlock;
 
 	sock->ops = answer->ops;
