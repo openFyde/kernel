@@ -365,9 +365,9 @@ tsk	.req	x28		// current thread_info
   adrp  x1, handle_arch_irq
   ldr x1, [x1, #:lo12:handle_arch_irq] 
 	mov	x0, sp
-//	irq_stack_entry
+	irq_stack_entry
 	blr	x1
-//	irq_stack_exit
+	irq_stack_exit
 	.endm
 
 	.text
@@ -920,6 +920,7 @@ el0_svc_naked:					// compat entry point
 	b.ne	__sys_trace
 	cmp     scno, sc_nr                     // check upper syscall limit
 	b.hs	ni_sys
+  mask_nospec64 scno, sc_nr, x19    // enforce bounds for syscall number
 	ldr	x16, [stbl, scno, lsl #3]	// address in the syscall table
 	blr	x16				// call sys_* routine
 	b	ret_fast_syscall

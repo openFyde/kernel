@@ -104,6 +104,13 @@ struct attribute_group {
 	.store	= _store,						\
 }
 
+#define __ATTR_MY(_name, _mode, _show, _store) {        \
+  .attr = {.name = __stringify(_name),        \
+     .mode = _mode },   \
+  .show = _show,            \
+  .store  = _store,           \
+}
+
 #define __ATTR_PREALLOC(_name, _mode, _show, _store) {			\
 	.attr = {.name = __stringify(_name),				\
 		 .mode = SYSFS_PREALLOC | VERIFY_OCTAL_PERMISSIONS(_mode) },\

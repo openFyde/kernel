@@ -181,3 +181,4 @@ obj-$(CONFIG_RK_HEADSET)	+= headset_observe/
 obj-$(CONFIG_RK_FLASH)		+= rkflash/
 
 obj-$(CONFIG_PKGLIST)   += pkglist/
+obj-y       += rongpin/

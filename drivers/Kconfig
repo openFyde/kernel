@@ -210,4 +210,6 @@ source "drivers/headset_observe/Kconfig"
 
 source "drivers/pkglist/Kconfig"
 
+source "drivers/rongpin/Kconfig"
+
 endmenu

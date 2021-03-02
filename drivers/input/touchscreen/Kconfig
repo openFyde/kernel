@@ -388,6 +388,15 @@ config TOUCHSCREEN_GT9XX
 	  code includes that in its table of IIC devices.
 	  If unsure, say N.
 
+config TOUCHSCREEN_GT9XX_5300
+  tristate "Goodix gt9xx support for rockchip platform for 5300 serials"
+  depends on I2C && ARCH_ROCKCHIP
+  help
+    Say Y here if you have a touchscreen interface using the gt9xx
+    on Rockchip platform, and your board-specific initialization
+    code includes that in its table of IIC devices.
+    If unsure, say N.
+
 config TOUCHSCREEN_ILI210X
 	tristate "Ilitek ILI210X based touchscreen"
 	depends on I2C

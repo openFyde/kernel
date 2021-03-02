@@ -607,4 +607,11 @@ config USB_NET_CH9200
 	  To compile this driver as a module, choose M here: the
 	  module will be called ch9200.
 
+config USB_NET_GOBI
+  tristate "Fibocom NL668 Modem USB ethernet support"
+  depends on USB_USBNET
+  select USB_WDM
+  help
+    Select this if you want to use a Fibocom NL668 USB Modem.
+
 endif # USB_NET_DRIVERS

@@ -2053,6 +2053,11 @@ static int option_probe(struct usb_serial *serial,
 	    iface_desc->bInterfaceClass != USB_CLASS_CDC_DATA)
 		return -ENODEV;
 
+  if (dev_desc->idVendor == cpu_to_le16(0x1508) &&
+      dev_desc->idProduct == cpu_to_le16(0x1001) &&
+      iface_desc->bInterfaceNumber >= 4)
+    return -ENODEV;
+
 	/* Store the device flags so we can use them during attach. */
 	usb_set_serial_data(serial, (void *)device_flags);
 
