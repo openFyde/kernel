@@ -4688,33 +4688,6 @@
   regulator-max-microvolt = <5000000>;
  };
 
- firmware {
-  android {
-   compatible = "android,firmware";
-   fstab {
-    compatible = "android,fstab";
-    system {
-     compatible = "android,system";
-     dev = "/dev/block/by-name/system";
-     type = "ext4";
-     mnt_flags = "rw,barrier=1,inode_readahead_blks=8";
-
-     fsmgr_flags = "wait";
-    };
-    vendor {
-     compatible = "android,vendor";
-     dev = "/dev/block/by-name/vendor";
-     type = "ext4";
-     mnt_flags = "rw,barrier=1,inode_readahead_blks=8";
-
-     fsmgr_flags = "wait";
-    };
-   };
-  };
- };
-
-
-
  vcc5v0_sys: vcc5v0-sys {
   compatible = "regulator-fixed";
   regulator-name = "vcc5v0_sys";
@@ -4784,12 +4757,6 @@
  };
 
 };
-
-
-
-
-
-
 
 &dfi {
  status = "okay";
