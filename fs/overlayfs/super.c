@@ -20,6 +20,7 @@
 #include <linux/statfs.h>
 #include <linux/seq_file.h>
 #include "overlayfs.h"
+#include "ovl_entry.h"
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Overlay filesystem");
@@ -27,48 +28,7 @@ MODULE_LICENSE("GPL");
 
 #define OVERLAYFS_SUPER_MAGIC 0x794c7630
 
-struct ovl_config {
-	char *lowerdir;
-	char *upperdir;
-	char *workdir;
-};
-
-/* private information held for overlayfs's superblock */
-struct ovl_fs {
-	struct vfsmount *upper_mnt;
-	unsigned numlower;
-	struct vfsmount **lower_mnt;
-	struct dentry *workdir;
-	long lower_namelen;
-	/* pathnames of lower and upper dirs, for show_options */
-	struct ovl_config config;
-	/* creds of process who forced instantiation of super block */
-	const struct cred *creator_cred;
-};
-
-struct ovl_dir_cache;
-
-/* private information held for every overlayfs dentry */
-struct ovl_entry {
-	struct dentry *__upperdentry;
-	struct ovl_dir_cache *cache;
-	union {
-		struct {
-			u64 version;
-			bool opaque;
-		};
-		struct rcu_head rcu;
-	};
-	unsigned numlower;
-	struct path lowerstack[];
-};
-
 #define OVL_MAX_STACK 500
-
-static struct dentry *__ovl_dentry_lower(struct ovl_entry *oe)
-{
-	return oe->numlower ? oe->lowerstack[0].dentry : NULL;
-}
 
 enum ovl_path_type ovl_path_type(struct dentry *dentry)
 {
@@ -91,11 +51,6 @@ enum ovl_path_type ovl_path_type(struct dentry *dentry)
 			type |= __OVL_PATH_MERGE;
 	}
 	return type;
-}
-
-static struct dentry *ovl_upperdentry_dereference(struct ovl_entry *oe)
-{
-	return lockless_dereference(oe->__upperdentry);
 }
 
 void ovl_path_upper(struct dentry *dentry, struct path *path)

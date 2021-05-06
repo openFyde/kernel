@@ -93,6 +93,9 @@
 #include "netlabel.h"
 #include "audit.h"
 #include "avc_ss.h"
+#ifdef CONFIG_OVERLAY_FS
+#include "../../fs/overlayfs/ovl_entry.h"
+#endif
 
 /* SECMARK reference count */
 static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
@@ -406,6 +409,29 @@ static int selinux_is_genfs_special_handling(struct super_block *sb)
 		!strcmp(sb->s_type->name, "rootfs");
 }
 
+#ifdef CONFIG_OVERLAY_FS
+static struct inode *get_real_inode_from_ovl(struct inode *inode) {
+  struct dentry *dentry;
+  struct ovl_entry *oe;
+  if (!is_overlay_inode(inode))
+    return inode;
+  if (S_ISDIR(inode->i_mode)) {
+     oe = inode->i_private;
+  } else {
+    dentry = d_find_any_alias(inode);
+    if (!dentry)
+      return inode;
+    oe = dentry->d_fsdata;
+  }
+  if (!oe)
+    return inode;
+  dentry = ovl_upperdentry_dereference(oe);
+  if (!dentry)
+    dentry = __ovl_dentry_lower(oe); 
+  return dentry ? d_inode(dentry) : inode;
+}
+#endif
+
 static int selinux_is_sblabel_mnt(struct super_block *sb)
 {
 	struct superblock_security_struct *sbsec = sb->s_security;
@@ -414,6 +440,10 @@ static int selinux_is_sblabel_mnt(struct super_block *sb)
 	 * IMPORTANT: Double-check logic in this function when adding a new
 	 * SECURITY_FS_USE_* definition!
 	 */
+#ifdef CONFIG_OVERLAY_FS
+  if (is_overlay_sb(sb))
+    return 1;
+#endif
 	BUILD_BUG_ON(SECURITY_FS_USE_MAX != 7);
 
 	switch (sbsec->behavior) {
@@ -3143,8 +3173,11 @@ static int selinux_inode_getsecurity(const struct inode *inode, const char *name
 	u32 size;
 	int error;
 	char *context = NULL;
+#ifdef CONFIG_OVERLAY_FS
+  struct inode_security_struct *isec = get_real_inode_from_ovl(inode)->i_security;
+#else
 	struct inode_security_struct *isec = inode->i_security;
-
+#endif
 	if (strcmp(name, XATTR_SELINUX_SUFFIX))
 		return -EOPNOTSUPP;
 
@@ -3182,7 +3215,11 @@ out_nofree:
 static int selinux_inode_setsecurity(struct inode *inode, const char *name,
 				     const void *value, size_t size, int flags)
 {
-	struct inode_security_struct *isec = inode->i_security;
+#ifdef CONFIG_OVERLAY_FS
+  struct inode_security_struct *isec = get_real_inode_from_ovl(inode)->i_security;
+#else
+  struct inode_security_struct *isec = inode->i_security;
+#endif
 	u32 newsid;
 	int rc;
 

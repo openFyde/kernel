@@ -6,7 +6,8 @@
  * under the terms of the GNU General Public License version 2 as published by
  * the Free Software Foundation.
  */
-
+#ifndef __OVERLAYFS__
+#define __OVERLAYFS__
 #include <linux/kernel.h>
 
 struct ovl_entry;
@@ -203,3 +204,5 @@ int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 		    struct path *lowerpath, struct kstat *stat);
 int ovl_copy_xattr(struct dentry *old, struct dentry *new);
 int ovl_set_attr(struct dentry *upper, struct kstat *stat);
+
+#endif // end of __OVERLAYFS__

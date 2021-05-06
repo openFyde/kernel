@@ -454,6 +454,7 @@ struct inode *ovl_new_inode(struct super_block *sb, umode_t mode,
 		break;
 
 	case S_IFLNK:
+    inode->i_private = NULL;
 		inode->i_op = &ovl_symlink_inode_operations;
 		break;
 
