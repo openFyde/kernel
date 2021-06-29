@@ -1204,6 +1204,10 @@ static int rockchip_vpu_queue_setup(struct vb2_queue *vq,
 		ret = -EINVAL;
 	}
 
+	for (i = 0; i < *plane_count; ++i)
+		if (!psize[i])
+			ret = -EINVAL;
+
 	vpu_debug_leave();
 
 	return ret;
