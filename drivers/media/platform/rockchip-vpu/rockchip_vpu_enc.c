@@ -931,6 +931,9 @@ static int rockchip_vpu_enc_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 
 	switch (ctrl->id) {
 	case V4L2_CID_PRIVATE_ROCKCHIP_RET_PARAMS:
+		/* Encoder not initialized yet. */
+		if (!ctx->run.priv_dst.cpu)
+			return -EIO;
 		memcpy(ctrl->p_new.p, ctx->run.priv_dst.cpu,
 			ROCKCHIP_RET_PARAMS_SIZE);
 		break;
