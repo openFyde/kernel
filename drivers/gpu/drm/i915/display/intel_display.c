@@ -17261,7 +17261,7 @@ static int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 
 	if (!drm_any_plane_has_format(&dev_priv->drm,
 				      mode_cmd->pixel_format,
-				      mode_cmd->modifier[0])) {
+				      mode_cmd->modifier[0]) && (mode_cmd->pixel_format != DRM_FORMAT_ARGB8888)) {
 		struct drm_format_name_buf format_name;
 
 		drm_dbg_kms(&dev_priv->drm,
