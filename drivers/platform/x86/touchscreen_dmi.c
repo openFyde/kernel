@@ -909,6 +909,22 @@ static const struct ts_dmi_data vinga_twizzle_j116_data = {
 	.properties	= vinga_twizzle_j116_props,
 };
 
+static const struct property_entry knote5_props[] = {
+	PROPERTY_ENTRY_U32("touchscreen-min-x", -100),
+	PROPERTY_ENTRY_U32("touchscreen-min-y", -49),
+	PROPERTY_ENTRY_U32("touchscreen-size-x", 1940),
+	PROPERTY_ENTRY_U32("touchscreen-size-y", 1500),
+	PROPERTY_ENTRY_STRING("firmware-name", "gsl1680-knote5.fw"),
+	PROPERTY_ENTRY_U32("silead,max-fingers", 10),
+	PROPERTY_ENTRY_BOOL("silead,home-button"),
+	{ }
+};
+
+static const struct ts_dmi_data knote5_data = {
+	.acpi_name  = "MSSL1680:00",
+	.properties = knote5_props,
+};
+
 /* NOTE: Please keep this table sorted alphabetically */
 const struct dmi_system_id touchscreen_dmi_table[] = {
 	{
@@ -1488,6 +1504,13 @@ const struct dmi_system_id touchscreen_dmi_table[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "YOURS"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Y8W81"),
+		},
+	},
+	{
+		.driver_data = (void *)&knote5_data,
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "ALLDOCUBE"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "i1112A"),
 		},
 	},
 	{ }
