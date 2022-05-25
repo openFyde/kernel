@@ -135,6 +135,14 @@ static const struct dmi_system_id pci_crs_quirks[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "HP xw9300 Workstation"),
 		},
 	},
+	{
+		.callback = set_nouse_crs,
+		.ident = "IdeaPad 14sIIL 2020",
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "81WD"),
+		},
+	},
 	{}
 };
 
