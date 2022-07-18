@@ -184,6 +184,8 @@ static void *vb2_dc_alloc(void *alloc_ctx, unsigned long size,
 		dev_err(dev, "dma_alloc_coherent of size %ld failed\n", size);
 		kfree(buf);
 		return ERR_PTR(-ENOMEM);
+	} else {
+		dev_err(dev, "dma_alloc_coherent size %ld okay\n", size);
 	}
 
 	if (!dma_get_attr(DMA_ATTR_NO_KERNEL_MAPPING, &buf->attrs))
