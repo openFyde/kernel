@@ -527,7 +527,6 @@ static int vidioc_reqbufs(struct file *file, void *priv,
 		ret = vb2_reqbufs(&ctx->vq_dst, reqbufs);
 		if (ret != 0) {
 			vpu_err("error in vb2_reqbufs() for E(D)\n");
-			dump_stack();
 			goto out;
 		}
 		break;
