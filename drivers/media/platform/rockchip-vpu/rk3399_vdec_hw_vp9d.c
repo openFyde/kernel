@@ -817,7 +817,6 @@ void rk3399_vdec_vp9d_run(struct rockchip_vpu_ctx *ctx)
 		   RKVDEC_CONFIG_DEC_CLK_GATE_E |
 		   RKVDEC_TIMEOUT_E,
 		   RKVDEC_REG_INTERRUPT);
-	WARN_ON_ONCE(1);
 }
 
 static u8 adapt_prob(u8 p1, u32 ct0, u32 ct1,
@@ -1285,5 +1284,4 @@ void rk3399_vdec_vp9d_done(struct rockchip_vpu_ctx *ctx,
 	rockchip_vpu_run_done(ctx, result);
 
 	vpu_debug_leave();
-	WARN_ON_ONCE(1);
 }
